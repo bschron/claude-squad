@@ -42,6 +42,13 @@ const (
 	StatePrompt
 )
 
+// optionPosition stores the X-range of a rendered menu option for click detection.
+type optionPosition struct {
+	startX int
+	endX   int
+	key    keys.KeyName
+}
+
 type Menu struct {
 	options       []keys.KeyName
 	height, width int
@@ -51,6 +58,9 @@ type Menu struct {
 
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
+
+	// optionPositions caches positions from the last String() render.
+	optionPositions []optionPosition
 }
 
 var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
@@ -144,7 +154,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group
-	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeyKanban, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)
@@ -172,6 +182,10 @@ func (m *Menu) String() string {
 		{6, 8}, // System group (tab, help, q)
 	}
 
+	// Track option positions for click detection.
+	m.optionPositions = nil
+	cursor := 0
+
 	for i, k := range m.options {
 		binding := keys.GlobalkeyBindings[k]
 
@@ -196,15 +210,27 @@ func (m *Menu) String() string {
 			inActionGroup = i >= groups[1].start && i < groups[1].end
 		}
 
+		startPos := cursor
 		if inActionGroup {
 			s.WriteString(localActionStyle.Render(binding.Help().Key))
+			cursor += len(binding.Help().Key)
 			s.WriteString(" ")
+			cursor++
 			s.WriteString(localActionStyle.Render(binding.Help().Desc))
+			cursor += len(binding.Help().Desc)
 		} else {
 			s.WriteString(localKeyStyle.Render(binding.Help().Key))
+			cursor += len(binding.Help().Key)
 			s.WriteString(" ")
+			cursor++
 			s.WriteString(localDescStyle.Render(binding.Help().Desc))
+			cursor += len(binding.Help().Desc)
 		}
+		m.optionPositions = append(m.optionPositions, optionPosition{
+			startX: startPos,
+			endX:   cursor,
+			key:    k,
+		})
 
 		// Add appropriate separator
 		if i != len(m.options)-1 {
@@ -212,16 +238,45 @@ func (m *Menu) String() string {
 			for _, group := range groups {
 				if i == group.end-1 {
 					s.WriteString(sepStyle.Render(verticalSeparator))
+					cursor += len(verticalSeparator)
 					isGroupEnd = true
 					break
 				}
 			}
 			if !isGroupEnd {
 				s.WriteString(sepStyle.Render(separator))
+				cursor += len(separator)
 			}
 		}
 	}
 
 	centeredMenuText := menuStyle.Render(s.String())
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
+}
+
+// OptionAtX returns the key name for the menu option at the given X
+// coordinate (local to the menu panel). The X position accounts for the
+// centered rendering of the menu text within the menu width.
+func (m *Menu) OptionAtX(localX int) (keys.KeyName, bool) {
+	if len(m.optionPositions) == 0 {
+		return 0, false
+	}
+
+	// The menu text is centered in m.width. Compute the left offset.
+	totalTextWidth := 0
+	if len(m.optionPositions) > 0 {
+		totalTextWidth = m.optionPositions[len(m.optionPositions)-1].endX
+	}
+	leftPad := (m.width - totalTextWidth) / 2
+	if leftPad < 0 {
+		leftPad = 0
+	}
+
+	adjustedX := localX - leftPad
+	for _, op := range m.optionPositions {
+		if adjustedX >= op.startX && adjustedX < op.endX {
+			return op.key, true
+		}
+	}
+	return 0, false
 }

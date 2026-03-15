@@ -28,6 +28,8 @@ const (
 	// Diff keybindings
 	KeyShiftUp
 	KeyShiftDown
+
+	KeyKanban // Key for toggling kanban board view
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -49,6 +51,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"r":          KeyResume,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
+	"K":          KeyKanban,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -108,6 +111,11 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
+	),
+
+	KeyKanban: key.NewBinding(
+		key.WithKeys("K"),
+		key.WithHelp("K", "kanban"),
 	),
 
 	// -- Special keybindings --
