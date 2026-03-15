@@ -67,19 +67,38 @@ func toClaudeSquadTmuxName(str string) string {
 	return fmt.Sprintf("%s%s", TmuxPrefix, str)
 }
 
-// NewTmuxSession creates a new TmuxSession with the given name and program.
-func NewTmuxSession(name string, program string) *TmuxSession {
-	return newTmuxSession(name, program, MakePtyFactory(), cmd.MakeExecutor())
+func toProjectWorktreeTmuxName(projectDirname string, sessionName string) string {
+	project := whiteSpaceRegex.ReplaceAllString(projectDirname, "")
+	project = strings.ReplaceAll(project, ".", "_")
+	name := whiteSpaceRegex.ReplaceAllString(sessionName, "")
+	name = strings.ReplaceAll(name, ".", "_")
+	return fmt.Sprintf("%s_worktree-%s", project, name)
+}
+
+// NewTmuxSession creates a new TmuxSession with project-local naming convention.
+func NewTmuxSession(name string, program string, projectDirname string) *TmuxSession {
+	return newTmuxSession(name, program, projectDirname, MakePtyFactory(), cmd.MakeExecutor())
+}
+
+// NewLegacyTmuxSession creates a TmuxSession with the old claudesquad_ naming convention.
+// Used for sessions loaded from state.json with legacy worktree paths, and for non-instance sessions.
+func NewLegacyTmuxSession(name string, program string) *TmuxSession {
+	return &TmuxSession{
+		sanitizedName: toClaudeSquadTmuxName(name),
+		program:       program,
+		ptyFactory:    MakePtyFactory(),
+		cmdExec:       cmd.MakeExecutor(),
+	}
 }
 
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
-func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
-	return newTmuxSession(name, program, ptyFactory, cmdExec)
+func NewTmuxSessionWithDeps(name string, program string, projectDirname string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
+	return newTmuxSession(name, program, projectDirname, ptyFactory, cmdExec)
 }
 
-func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
+func newTmuxSession(name string, program string, projectDirname string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
 	return &TmuxSession{
-		sanitizedName: toClaudeSquadTmuxName(name),
+		sanitizedName: toProjectWorktreeTmuxName(projectDirname, name),
 		program:       program,
 		ptyFactory:    ptyFactory,
 		cmdExec:       cmdExec,
@@ -100,14 +119,20 @@ func NewExternalTmuxSession(sessionName string) *TmuxSession {
 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
-func (t *TmuxSession) Start(workDir string) error {
+// An optional programOverride can be provided to use a different command than the session's default program.
+func (t *TmuxSession) Start(workDir string, programOverride ...string) error {
 	// Check if the session already exists
 	if t.DoesSessionExist() {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
 
+	prog := t.program
+	if len(programOverride) > 0 && programOverride[0] != "" {
+		prog = programOverride[0]
+	}
+
 	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, prog)
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
@@ -511,7 +536,7 @@ func CleanupSessions(cmdExec cmd.Executor) error {
 		return fmt.Errorf("failed to list tmux sessions: %v", err)
 	}
 
-	re := regexp.MustCompile(fmt.Sprintf(`%s.*:`, TmuxPrefix))
+	re := regexp.MustCompile(`(?:claudesquad_\S+|[\w-]+_worktree-\S+):`)
 	matches := re.FindAllString(string(output), -1)
 	for i, match := range matches {
 		matches[i] = match[:strings.Index(match, ":")]

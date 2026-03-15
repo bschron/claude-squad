@@ -42,11 +42,15 @@ func NewMockPtyFactory(t *testing.T) *MockPtyFactory {
 }
 
 func TestSanitizeName(t *testing.T) {
-	session := NewTmuxSession("asdf", "program")
-	require.Equal(t, TmuxPrefix+"asdf", session.sanitizedName)
+	session := NewTmuxSession("asdf", "program", "myproject")
+	require.Equal(t, "myproject_worktree-asdf", session.sanitizedName)
 
-	session = NewTmuxSession("a sd f . . asdf", "program")
-	require.Equal(t, TmuxPrefix+"asdf__asdf", session.sanitizedName)
+	session = NewTmuxSession("a sd f . . asdf", "program", "my.project")
+	require.Equal(t, "my_project_worktree-asdf__asdf", session.sanitizedName)
+
+	// Legacy naming
+	legacy := NewLegacyTmuxSession("asdf", "program")
+	require.Equal(t, TmuxPrefix+"asdf", legacy.sanitizedName)
 }
 
 func TestStartTmuxSession(t *testing.T) {
@@ -67,14 +71,14 @@ func TestStartTmuxSession(t *testing.T) {
 	}
 
 	workdir := t.TempDir()
-	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	session := newTmuxSession("test-session", "claude", "proj", ptyFactory, cmdExec)
 
 	err := session.Start(workdir)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(ptyFactory.cmds))
-	require.Equal(t, fmt.Sprintf("tmux new-session -d -s claudesquad_test-session -c %s claude", workdir),
+	require.Equal(t, fmt.Sprintf("tmux new-session -d -s proj_worktree-test-session -c %s claude", workdir),
 		cmd2.ToString(ptyFactory.cmds[0]))
-	require.Equal(t, "tmux attach-session -t claudesquad_test-session",
+	require.Equal(t, "tmux attach-session -t proj_worktree-test-session",
 		cmd2.ToString(ptyFactory.cmds[1]))
 
 	require.Equal(t, 2, len(ptyFactory.files))

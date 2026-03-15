@@ -1,6 +1,7 @@
 package git
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"fmt"
 	"os"
@@ -11,12 +12,8 @@ import (
 
 // Setup creates a new worktree for the session
 func (g *GitWorktree) Setup() error {
-	// Ensure worktrees directory exists early (can be done in parallel with branch check)
-	worktreesDir, err := getWorktreeDirectory()
-	if err != nil {
-		return fmt.Errorf("failed to get worktree directory: %w", err)
-	}
-
+	// Ensure worktrees directory exists early
+	worktreesDir := filepath.Dir(g.worktreePath)
 	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
 		return err
 	}
@@ -28,7 +25,7 @@ func (g *GitWorktree) Setup() error {
 	}
 
 	// Check if branch exists using git CLI (much faster than go-git PlainOpen)
-	_, err = g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName))
+	_, err := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName))
 	if err == nil {
 		return g.setupFromExistingBranch()
 	}
@@ -151,12 +148,13 @@ func (g *GitWorktree) Prune() error {
 	return nil
 }
 
-// CleanupWorktrees removes all worktrees and their associated branches
+// CleanupWorktrees removes all legacy worktrees (in ~/.claude-squad/worktrees/) and their associated branches
 func CleanupWorktrees() error {
-	worktreesDir, err := getWorktreeDirectory()
+	configDir, err := config.GetConfigDir()
 	if err != nil {
-		return fmt.Errorf("failed to get worktree directory: %w", err)
+		return fmt.Errorf("failed to get config directory: %w", err)
 	}
+	worktreesDir := filepath.Join(configDir, "worktrees")
 
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
@@ -216,5 +214,54 @@ func CleanupWorktrees() error {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
 	}
 
+	return nil
+}
+
+// CleanupProjectWorktrees removes all project-local worktrees (in .claude/worktrees/) and their branches
+func CleanupProjectWorktrees(projectDir string) error {
+	repoRoot, err := FindGitRepoRoot(projectDir)
+	if err != nil {
+		return err
+	}
+
+	worktreesDir := filepath.Join(repoRoot, ".claude", "worktrees")
+	entries, err := os.ReadDir(worktreesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(worktreesDir, entry.Name())
+
+		// Get the branch of this worktree
+		branchCmd := exec.Command("git", "-C", wtPath, "branch", "--show-current")
+		if out, err := branchCmd.Output(); err == nil {
+			branch := strings.TrimSpace(string(out))
+			if branch != "" {
+				// Remove worktree via git
+				rmCmd := exec.Command("git", "-C", repoRoot, "worktree", "remove", "-f", wtPath)
+				if err := rmCmd.Run(); err != nil {
+					log.ErrorLog.Printf("failed to remove worktree %s: %v", wtPath, err)
+				}
+				// Delete branch
+				delCmd := exec.Command("git", "-C", repoRoot, "branch", "-D", branch)
+				if err := delCmd.Run(); err != nil {
+					log.ErrorLog.Printf("failed to delete branch %s: %v", branch, err)
+				}
+			}
+		}
+		// Fallback: remove directory if git worktree remove failed
+		os.RemoveAll(wtPath)
+	}
+
+	// Prune
+	pruneCmd := exec.Command("git", "-C", repoRoot, "worktree", "prune")
+	_ = pruneCmd.Run()
 	return nil
 }

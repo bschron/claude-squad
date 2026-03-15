@@ -1,20 +1,13 @@
 package git
 
 import (
-	"claude-squad/config"
 	"claude-squad/log"
 	"fmt"
 	"path/filepath"
-	"time"
 )
 
-func getWorktreeDirectory() (string, error) {
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(configDir, "worktrees"), nil
+func getWorktreeDirectory(repoPath string) string {
+	return filepath.Join(repoPath, ".claude", "worktrees")
 }
 
 // GitWorktree manages git worktree operations for a session
@@ -45,8 +38,8 @@ func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName
 	}
 }
 
-// resolveWorktreePaths resolves the repo root and generates a unique worktree path for the given branch name.
-func resolveWorktreePaths(repoPath string, branchName string) (resolvedRepo string, worktreePath string, err error) {
+// resolveWorktreePaths resolves the repo root and generates a worktree path using the session name.
+func resolveWorktreePaths(repoPath string, sessionName string) (resolvedRepo string, worktreePath string, err error) {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		log.ErrorLog.Printf("git worktree path abs error, falling back to repoPath %s: %s", repoPath, err)
@@ -58,26 +51,18 @@ func resolveWorktreePaths(repoPath string, branchName string) (resolvedRepo stri
 		return "", "", err
 	}
 
-	worktreeDir, err := getWorktreeDirectory()
-	if err != nil {
-		return "", "", err
-	}
-
-	worktreePath = filepath.Join(worktreeDir, sanitizeBranchName(branchName))
-	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
+	worktreeDir := getWorktreeDirectory(resolvedRepo)
+	worktreePath = filepath.Join(worktreeDir, sessionName)
 
 	return resolvedRepo, worktreePath, nil
 }
 
 // NewGitWorktree creates a new GitWorktree instance
 func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, branchname string, err error) {
-	cfg := config.LoadConfig()
-	branchName := fmt.Sprintf("%s%s", cfg.BranchPrefix, sessionName)
-	// Sanitize the final branch name to handle invalid characters from any source
-	// (e.g., backslashes from Windows domain usernames like DOMAIN\user)
+	branchName := fmt.Sprintf("worktree-%s", sessionName)
 	branchName = sanitizeBranchName(branchName)
 
-	repoPath, worktreePath, err := resolveWorktreePaths(repoPath, branchName)
+	repoPath, worktreePath, err := resolveWorktreePaths(repoPath, sessionName)
 	if err != nil {
 		return nil, "", err
 	}
@@ -93,7 +78,7 @@ func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, bra
 // NewGitWorktreeFromBranch creates a new GitWorktree that uses an existing branch.
 // The branch will not be deleted on cleanup.
 func NewGitWorktreeFromBranch(repoPath string, branchName string, sessionName string) (*GitWorktree, error) {
-	repoPath, worktreePath, err := resolveWorktreePaths(repoPath, branchName)
+	repoPath, worktreePath, err := resolveWorktreePaths(repoPath, sessionName)
 	if err != nil {
 		return nil, err
 	}

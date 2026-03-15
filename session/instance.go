@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -142,9 +143,19 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		},
 	}
 
+	// Detect legacy sessions (worktree in ~/.claude-squad/worktrees/)
+	configDir, _ := config.GetConfigDir()
+	globalWorktreeDir := filepath.Join(configDir, "worktrees")
+	isLegacy := strings.HasPrefix(data.Worktree.WorktreePath, globalWorktreeDir)
+
 	if instance.Paused() {
 		instance.started = true
-		instance.tmuxSession = tmux.NewTmuxSession(instance.Title, instance.Program)
+		if isLegacy {
+			instance.tmuxSession = tmux.NewLegacyTmuxSession(instance.Title, instance.Program)
+		} else {
+			projectDirname := filepath.Base(data.Worktree.RepoPath)
+			instance.tmuxSession = tmux.NewTmuxSession(instance.Title, instance.Program, projectDirname)
+		}
 	} else {
 		if err := instance.Start(false); err != nil {
 			return nil, err
@@ -254,13 +265,20 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Resolve repo root for tmux naming
+	repoRoot, err := git.FindGitRepoRoot(i.Path)
+	if err != nil {
+		return fmt.Errorf("failed to find git repo root: %w", err)
+	}
+	projectDirname := filepath.Base(repoRoot)
+
 	var tmuxSession *tmux.TmuxSession
 	if i.tmuxSession != nil {
 		// Use existing tmux session (useful for testing)
 		tmuxSession = i.tmuxSession
 	} else {
 		// Create new tmux session
-		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
+		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program, projectDirname)
 	}
 	i.tmuxSession = tmuxSession
 
@@ -307,8 +325,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			return setupErr
 		}
 
+		// Build program with flags for Claude
+		startProgram := i.Program
+		if isClaudeProgram(i.Program) {
+			startProgram = i.Program + " --dangerously-skip-permissions"
+		}
+
 		// Create new session
-		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
@@ -321,6 +345,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	i.SetStatus(Running)
 
 	return nil
+}
+
+// isClaudeProgram returns true if the program is Claude Code.
+func isClaudeProgram(program string) bool {
+	return program == tmux.ProgramClaude || strings.HasSuffix(program, tmux.ProgramClaude)
 }
 
 // Kill terminates the instance and cleans up all resources
@@ -541,13 +570,19 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to setup git worktree: %w", err)
 	}
 
+	// Build program with flags for Claude
+	startProgram := i.Program
+	if isClaudeProgram(i.Program) {
+		startProgram = i.Program + " --dangerously-skip-permissions"
+	}
+
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {
 		// Session exists, just restore PTY connection to it
 		if err := i.tmuxSession.Restore(); err != nil {
 			log.ErrorLog.Print(err)
 			// If restore fails, fall back to creating new session
-			if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+			if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {
 				log.ErrorLog.Print(err)
 				// Cleanup git worktree if tmux session creation fails
 				if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
@@ -559,7 +594,7 @@ func (i *Instance) Resume() error {
 		}
 	} else {
 		// Create new tmux session
-		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {
 			log.ErrorLog.Print(err)
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {

@@ -149,14 +149,14 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	}
 
 	termName := "term_" + instance.Title
-	ts := tmux.NewTmuxSession(termName, shell)
+	ts := tmux.NewLegacyTmuxSession(termName, shell)
 
 	// Check if session already exists (e.g. from a previous run)
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewTmuxSession(termName, shell)
+			ts = tmux.NewLegacyTmuxSession(termName, shell)
 			if err := ts.Start(worktreePath); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}

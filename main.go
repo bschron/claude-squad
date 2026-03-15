@@ -100,7 +100,20 @@ var (
 			if err := git.CleanupWorktrees(); err != nil {
 				return fmt.Errorf("failed to cleanup worktrees: %w", err)
 			}
-			fmt.Println("Worktrees have been cleaned up")
+			fmt.Println("Legacy worktrees have been cleaned up")
+
+			// Also cleanup project-local worktrees if we're in a git repo
+			currentDir, err := filepath.Abs(".")
+			if err != nil {
+				return fmt.Errorf("failed to get current directory: %w", err)
+			}
+			if git.IsGitRepo(currentDir) {
+				if err := git.CleanupProjectWorktrees(currentDir); err != nil {
+					log.ErrorLog.Printf("failed to cleanup project worktrees: %v", err)
+				} else {
+					fmt.Println("Project worktrees have been cleaned up")
+				}
+			}
 
 			// Kill any daemon that's running.
 			if err := daemon.StopDaemon(); err != nil {
