@@ -72,6 +72,8 @@ type home struct {
 
 	// promptAfterName tracks if we should enter prompt mode after naming
 	promptAfterName bool
+	// pendingExecAttach stores a tea.ExecCommand when a help screen must be shown before attaching
+	pendingExecAttach tea.ExecCommand
 
 	// keySent is used to manage underlining menu items
 	keySent bool
@@ -337,6 +339,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	case attachFinishedMsg:
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		if msg.err != nil {
+			return m, tea.Batch(m.handleError(msg.err), tea.WindowSize())
+		}
+		return m, tea.WindowSize()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -782,30 +791,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Terminal tab: attach to terminal session
+
+		// Build the exec command
+		var execCmd tea.ExecCommand
+		var err error
 		if m.tabbedWindow.IsInTerminalTab() {
-			m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-				ch, err := m.tabbedWindow.AttachTerminal()
-				if err != nil {
-					m.handleError(err)
-					return
-				}
-				<-ch
-				m.state = stateDefault
-			})
+			execCmd, err = m.tabbedWindow.ExecAttachTerminal()
+		} else {
+			execCmd, err = m.list.ExecAttach()
+		}
+		if err != nil {
+			return m, m.handleError(err)
+		}
+
+		// Check if help screen needs to be shown
+		attachCmd := tea.Exec(execCmd, func(err error) tea.Msg {
+			return attachFinishedMsg{err: err}
+		})
+
+		flag := helpTypeInstanceAttach{}.mask()
+		if (m.appState.GetHelpScreensSeen() & flag) == 0 {
+			// Store command, show help first
+			m.pendingExecAttach = execCmd
+			m.showHelpScreen(helpTypeInstanceAttach{}, nil)
 			return m, nil
 		}
-		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-			ch, err := m.list.Attach()
-			if err != nil {
-				m.handleError(err)
-				return
-			}
-			<-ch
-			m.state = stateDefault
-		})
-		return m, nil
+		// Help already seen, attach directly
+		return m, attachCmd
 	default:
 		return m, nil
 	}
@@ -856,6 +868,10 @@ type previewTickMsg struct{}
 type tickUpdateMetadataMessage struct{}
 
 type instanceChangedMsg struct{}
+
+type attachFinishedMsg struct {
+	err error
+}
 
 type instanceStartedMsg struct {
 	instance        *session.Instance

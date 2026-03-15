@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -519,6 +520,90 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}
 	return string(output), nil
+}
+
+// tmuxAttachCmd implements tea.ExecCommand for attaching to a tmux session.
+// It runs a fresh `tmux attach-session` process with real stdin/stdout,
+// allowing tmux to properly manage raw mode and mouse tracking.
+type tmuxAttachCmd struct {
+	session *TmuxSession
+	stdin   io.Reader
+	stdout  io.Writer
+	stderr  io.Writer
+}
+
+func (c *tmuxAttachCmd) SetStdin(r io.Reader)  { c.stdin = r }
+func (c *tmuxAttachCmd) SetStdout(w io.Writer)  { c.stdout = w }
+func (c *tmuxAttachCmd) SetStderr(w io.Writer)  { c.stderr = w }
+
+func (c *tmuxAttachCmd) Run() error {
+	// Close the background PTY to avoid tmux multi-client size issues.
+	if c.session.ptmx != nil {
+		c.session.ptmx.Close()
+		c.session.ptmx = nil
+	}
+
+	// Start a fresh tmux attach-session process.
+	cmd := exec.Command("tmux", "attach-session", "-t", c.session.sanitizedName)
+	cmd.Stdout = c.stdout
+	cmd.Stderr = c.stderr
+
+	// Use a pipe for stdin so we can intercept Ctrl+Q.
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		// Restore background PTY before returning.
+		_ = c.session.Restore()
+		return fmt.Errorf("error creating stdin pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = c.session.Restore()
+		return fmt.Errorf("error starting tmux attach: %w", err)
+	}
+
+	// Forward stdin to the tmux process, intercepting Ctrl+Q for clean detach.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 32)
+		for {
+			nr, err := c.stdin.Read(buf)
+			if err != nil {
+				return
+			}
+			// Check for Ctrl+Q (ASCII 0x11).
+			if nr == 1 && buf[0] == 0x11 {
+				// Send SIGHUP for a clean tmux detach.
+				if cmd.Process != nil {
+					_ = cmd.Process.Signal(syscall.SIGHUP)
+				}
+				return
+			}
+			if _, err := stdinPipe.Write(buf[:nr]); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for the tmux process to exit.
+	waitErr := cmd.Wait()
+	<-done
+
+	// Re-create the background PTY for detached capture.
+	if restoreErr := c.session.Restore(); restoreErr != nil {
+		if waitErr != nil {
+			return fmt.Errorf("tmux attach error: %v; restore error: %v", waitErr, restoreErr)
+		}
+		return fmt.Errorf("error restoring session: %w", restoreErr)
+	}
+
+	return waitErr
+}
+
+// ExecAttach returns a tea.ExecCommand that attaches to this tmux session.
+// It is designed to be used with tea.Exec for proper Bubbletea suspension.
+func (t *TmuxSession) ExecAttach() *tmuxAttachCmd {
+	return &tmuxAttachCmd{session: t}
 }
 
 // CleanupSessions kills all tmux sessions that start with "session-"
