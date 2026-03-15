@@ -46,6 +46,14 @@ const (
 	stateConfirm
 )
 
+// layoutBounds tracks the screen rectangles of each panel for mouse hit testing.
+type layoutBounds struct {
+	list    ui.Rect
+	preview ui.Rect
+	kanban  ui.Rect
+	menu    ui.Rect
+}
+
 type home struct {
 	ctx context.Context
 
@@ -86,6 +94,12 @@ type home struct {
 	menu *ui.Menu
 	// tabbedWindow displays the tabbed window with preview and diff panes
 	tabbedWindow *ui.TabbedWindow
+	// kanban displays the kanban board panel
+	kanban *ui.KanbanBoard
+	// kanbanVisible tracks whether the kanban panel is shown
+	kanbanVisible bool
+	// bounds stores the layout rectangles for mouse hit testing
+	bounds layoutBounds
 	// errBox displays error messages
 	errBox *ui.ErrBox
 	// global spinner instance. we plumb this down to where it's needed
@@ -133,6 +147,7 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 		state:        stateDefault,
 		appState:     appState,
 	}
+	h.kanban = ui.NewKanbanBoard(&h.spinner)
 	h.list = ui.NewList(&h.spinner, autoYes)
 
 	// Load saved instances filtered by current project
@@ -186,17 +201,44 @@ func (m *home) hasInstanceWithTitle(title string) bool {
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
-	// List takes 30% of width, preview takes 70%
-	listWidth := int(float32(msg.Width) * 0.3)
-	tabsWidth := msg.Width - listWidth
+	// Auto-hide kanban when terminal is too narrow
+	if msg.Width < 80 {
+		m.kanbanVisible = false
+	}
 
 	// Menu takes 10% of height, list and window take 90%
 	contentHeight := int(float32(msg.Height) * 0.9)
 	menuHeight := msg.Height - contentHeight - 1     // minus 1 for error box
 	m.errBox.SetSize(int(float32(msg.Width)*0.9), 1) // error box takes 1 row
 
+	var listWidth, tabsWidth, kanbanWidth int
+
+	if m.kanbanVisible {
+		// 3-panel layout: 20% list, 45% preview, 35% kanban
+		listWidth = int(float32(msg.Width) * 0.2)
+		kanbanWidth = int(float32(msg.Width) * 0.35)
+		tabsWidth = msg.Width - listWidth - kanbanWidth
+	} else {
+		// 2-panel layout: 30% list, 70% preview
+		listWidth = int(float32(msg.Width) * 0.3)
+		tabsWidth = msg.Width - listWidth
+		kanbanWidth = 0
+	}
+
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+	m.kanban.SetSize(kanbanWidth, contentHeight)
+
+	// Populate layout bounds for mouse hit testing.
+	// Content starts at Y=0; the list is left-most, then preview, then kanban.
+	m.bounds.list = ui.Rect{X: 0, Y: 0, Width: listWidth, Height: contentHeight}
+	m.bounds.preview = ui.Rect{X: listWidth, Y: 0, Width: tabsWidth, Height: contentHeight}
+	if m.kanbanVisible {
+		m.bounds.kanban = ui.Rect{X: listWidth + tabsWidth, Y: 0, Width: kanbanWidth, Height: contentHeight}
+	} else {
+		m.bounds.kanban = ui.Rect{}
+	}
+	m.bounds.menu = ui.Rect{X: 0, Y: contentHeight, Width: msg.Width, Height: menuHeight + 1}
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -263,20 +305,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd
 	case tea.MouseMsg:
-		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
-			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
-				selected := m.list.GetSelectedInstance()
-				if selected == nil || selected.Status == session.Paused {
-					return m, nil
-				}
+			x, y := msg.X, msg.Y
 
-				switch msg.Button {
-				case tea.MouseButtonWheelUp:
-					m.tabbedWindow.ScrollUp()
-				case tea.MouseButtonWheelDown:
-					m.tabbedWindow.ScrollDown()
-				}
+			switch msg.Button {
+			case tea.MouseButtonLeft:
+				return m.handleMouseClick(x, y)
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				return m.handleMouseWheel(msg.Button, x, y)
 			}
 		}
 		return m, nil
@@ -814,6 +850,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		// Help already seen, attach directly
 		return m, attachCmd
+	case keys.KeyKanban:
+		m.kanbanVisible = !m.kanbanVisible
+		return m, tea.WindowSize()
 	default:
 		return m, nil
 	}
@@ -829,6 +868,8 @@ func (m *home) instanceChanged() tea.Cmd {
 	m.tabbedWindow.SetInstance(selected)
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
+	// Update kanban board
+	m.kanban.UpdateInstances(m.list.GetInstances(), selected)
 
 	// If there's no selected instance, we don't need to update the preview.
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
@@ -979,10 +1020,142 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// handleMouseClick routes a left-click to the appropriate panel.
+func (m *home) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
+	if m.state != stateDefault {
+		return m, nil
+	}
+
+	if m.bounds.list.Contains(x, y) {
+		localY := y - m.bounds.list.Y
+		if idx := m.list.IndexAtY(localY); idx >= 0 {
+			m.list.SetSelectedIndex(idx)
+			return m, m.instanceChanged()
+		}
+	} else if m.kanbanVisible && m.bounds.kanban.Contains(x, y) {
+		localX := x - m.bounds.kanban.X
+		localY := y - m.bounds.kanban.Y
+		if inst, action := m.kanban.HandleClick(localX, localY); inst != nil {
+			// Select the instance in the list first
+			m.list.SelectInstance(inst)
+			cmd := m.instanceChanged()
+
+			switch action {
+			case "send":
+				// Enter prompt state
+				m.state = statePrompt
+				m.menu.SetState(ui.StatePrompt)
+				m.textInputOverlay = m.newPromptOverlay()
+				return m, tea.Batch(cmd, tea.WindowSize())
+			case "open":
+				if inst.Paused() || inst.Status == session.Loading || !inst.TmuxAlive() {
+					return m, cmd
+				}
+				execCmd, err := m.list.ExecAttach()
+				if err != nil {
+					return m, tea.Batch(cmd, m.handleError(err))
+				}
+				return m, tea.Batch(cmd, tea.Exec(execCmd, func(err error) tea.Msg {
+					return attachFinishedMsg{err: err}
+				}))
+			case "stop":
+				// Same as KeyKill / checkout flow
+				if inst.Status == session.Loading {
+					return m, cmd
+				}
+				if err := inst.Pause(); err != nil {
+					return m, tea.Batch(cmd, m.handleError(err))
+				}
+				m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
+				return m, tea.Batch(cmd, m.instanceChanged())
+			case "resume":
+				if inst.IsExternal() {
+					return m, tea.Batch(cmd, m.handleError(fmt.Errorf("cannot resume external session")))
+				}
+				if err := inst.Resume(); err != nil {
+					return m, tea.Batch(cmd, m.handleError(err))
+				}
+				return m, tea.Batch(cmd, tea.WindowSize())
+			case "delete":
+				// Use the same kill flow as KeyKill
+				killAction := func() tea.Msg {
+					worktree, err := inst.GetGitWorktree()
+					if err != nil {
+						return err
+					}
+					checkedOut, err := worktree.IsBranchCheckedOut()
+					if err != nil {
+						return err
+					}
+					if checkedOut {
+						return fmt.Errorf("instance %s is currently checked out", inst.Title)
+					}
+					m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
+					if err := m.storage.DeleteInstance(inst.Title); err != nil {
+						return err
+					}
+					m.list.Kill()
+					return instanceChangedMsg{}
+				}
+				message := fmt.Sprintf("[!] Kill session '%s'?", inst.Title)
+				return m, tea.Batch(cmd, m.confirmAction(message, killAction))
+			default:
+				// Just selection, no action
+				return m, cmd
+			}
+		}
+	}
+
+	return m, nil
+}
+
+// handleMouseWheel routes scroll wheel events to the appropriate panel.
+func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, tea.Cmd) {
+	delta := 1
+	if button == tea.MouseButtonWheelUp {
+		delta = -1
+	}
+
+	if m.kanbanVisible && m.bounds.kanban.Contains(x, y) {
+		localX := x - m.bounds.kanban.X
+		colIdx := m.kanban.ColumnAtX(localX)
+		m.kanban.ScrollColumn(colIdx, delta)
+		return m, nil
+	}
+
+	if m.bounds.list.Contains(x, y) {
+		if delta > 0 {
+			m.list.Down()
+		} else {
+			m.list.Up()
+		}
+		return m, m.instanceChanged()
+	}
+
+	// Default: scroll the preview/diff/terminal pane
+	selected := m.list.GetSelectedInstance()
+	if selected == nil || selected.Status == session.Paused {
+		return m, nil
+	}
+	if button == tea.MouseButtonWheelUp {
+		m.tabbedWindow.ScrollUp()
+	} else {
+		m.tabbedWindow.ScrollDown()
+	}
+	return m, nil
+}
+
 func (m *home) View() string {
 	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
+
+	var listAndPreview string
+	if m.kanbanVisible {
+		kanbanWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.kanban.String())
+		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding, kanbanWithPadding)
+	} else {
+		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
+	}
 
 	mainView := lipgloss.JoinVertical(
 		lipgloss.Center,

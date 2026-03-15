@@ -388,3 +388,45 @@ func (l *List) SelectInstance(target *session.Instance) {
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
 }
+
+// IndexAtY returns the list item index at the given Y coordinate (in local
+// coordinates relative to the list panel top). Returns -1 if no item matches.
+func (l *List) IndexAtY(localY int) int {
+	if len(l.items) == 0 {
+		return -1
+	}
+
+	// The list layout starts with:
+	//   2 blank lines (\n\n) + 1 title line + 2 blank lines (\n\n) = offset 5
+	// Each rendered item is approximately 4 lines high (title with top padding,
+	// desc with bottom padding). Items are separated by 2 newlines (\n\n).
+	const headerLines = 5
+	const itemHeight = 4
+	const itemGap = 2
+
+	y := localY - headerLines
+	if y < 0 {
+		return -1
+	}
+
+	// Each item block = itemHeight + itemGap (except the last which has no gap)
+	stride := itemHeight + itemGap
+	idx := y / stride
+	offset := y % stride
+
+	// Only count clicks within the item area, not the gap
+	if offset >= itemHeight {
+		return -1
+	}
+
+	if idx >= 0 && idx < len(l.items) {
+		return idx
+	}
+	return -1
+}
+
+// SetSelectedIndex sets the selected index. Noop if the index is out of bounds.
+// This is an alias for SetSelectedInstance that takes an int index.
+func (l *List) SetSelectedIndex(idx int) {
+	l.SetSelectedInstance(idx)
+}
