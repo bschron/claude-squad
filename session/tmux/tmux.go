@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -543,51 +542,17 @@ func (c *tmuxAttachCmd) Run() error {
 		c.session.ptmx = nil
 	}
 
+	// Bind Ctrl+Q to detach-client so the user can cleanly exit.
+	_ = exec.Command("tmux", "bind-key", "-T", "root", "C-q", "detach-client").Run()
+	defer exec.Command("tmux", "unbind-key", "-T", "root", "C-q").Run()
+
 	// Start a fresh tmux attach-session process.
 	cmd := exec.Command("tmux", "attach-session", "-t", c.session.sanitizedName)
+	cmd.Stdin = c.stdin
 	cmd.Stdout = c.stdout
 	cmd.Stderr = c.stderr
 
-	// Use a pipe for stdin so we can intercept Ctrl+Q.
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		// Restore background PTY before returning.
-		_ = c.session.Restore()
-		return fmt.Errorf("error creating stdin pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		_ = c.session.Restore()
-		return fmt.Errorf("error starting tmux attach: %w", err)
-	}
-
-	// Forward stdin to the tmux process, intercepting Ctrl+Q for clean detach.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		buf := make([]byte, 32)
-		for {
-			nr, err := c.stdin.Read(buf)
-			if err != nil {
-				return
-			}
-			// Check for Ctrl+Q (ASCII 0x11).
-			if nr == 1 && buf[0] == 0x11 {
-				// Send SIGHUP for a clean tmux detach.
-				if cmd.Process != nil {
-					_ = cmd.Process.Signal(syscall.SIGHUP)
-				}
-				return
-			}
-			if _, err := stdinPipe.Write(buf[:nr]); err != nil {
-				return
-			}
-		}
-	}()
-
-	// Wait for the tmux process to exit.
-	waitErr := cmd.Wait()
-	<-done
+	waitErr := cmd.Run()
 
 	// Re-create the background PTY for detached capture.
 	if restoreErr := c.session.Restore(); restoreErr != nil {
