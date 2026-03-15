@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type Status int
@@ -359,6 +360,14 @@ func (i *Instance) Attach() (chan struct{}, error) {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
 	return i.tmuxSession.Attach()
+}
+
+// ExecAttach returns a tea.ExecCommand for attaching to this instance's tmux session.
+func (i *Instance) ExecAttach() (tea.ExecCommand, error) {
+	if !i.started {
+		return nil, fmt.Errorf("cannot attach instance that has not been started")
+	}
+	return i.tmuxSession.ExecAttach(), nil
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {

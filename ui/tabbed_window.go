@@ -3,6 +3,8 @@ package ui
 import (
 	"claude-squad/log"
 	"claude-squad/session"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -187,6 +189,11 @@ func (w *TabbedWindow) GetActiveTab() int {
 // AttachTerminal attaches to the terminal tmux session
 func (w *TabbedWindow) AttachTerminal() (chan struct{}, error) {
 	return w.terminal.Attach()
+}
+
+// ExecAttachTerminal returns a tea.ExecCommand for attaching to the terminal tmux session.
+func (w *TabbedWindow) ExecAttachTerminal() (tea.ExecCommand, error) {
+	return w.terminal.ExecAttach()
 }
 
 // CleanupTerminal closes the terminal session

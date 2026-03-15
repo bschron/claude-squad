@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -197,6 +198,23 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 	ts := s.tmuxSession
 	t.mu.Unlock()
 	return ts.Attach()
+}
+
+// ExecAttach returns a tea.ExecCommand for attaching to the terminal tmux session.
+func (t *TerminalPane) ExecAttach() (tea.ExecCommand, error) {
+	t.mu.Lock()
+	s, ok := t.sessions[t.currentTitle]
+	if !ok || s.tmuxSession == nil {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("no terminal session to attach to")
+	}
+	if !s.tmuxSession.DoesSessionExist() {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("terminal session does not exist")
+	}
+	ts := s.tmuxSession
+	t.mu.Unlock()
+	return ts.ExecAttach(), nil
 }
 
 // Close kills all cached terminal tmux sessions and cleans up.

@@ -167,6 +167,13 @@ func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.textOverlay.HandleKeyPress(msg)
 	if shouldClose {
 		m.state = stateDefault
+		if m.pendingExecAttach != nil {
+			execCmd := m.pendingExecAttach
+			m.pendingExecAttach = nil
+			return m, tea.Exec(execCmd, func(err error) tea.Msg {
+				return attachFinishedMsg{err: err}
+			})
+		}
 		return m, tea.Sequence(
 			tea.WindowSize(),
 			func() tea.Msg {

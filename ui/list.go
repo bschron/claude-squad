@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
@@ -304,6 +305,12 @@ func (l *List) Kill() {
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()
+}
+
+// ExecAttach returns a tea.ExecCommand for attaching to the selected instance.
+func (l *List) ExecAttach() (tea.ExecCommand, error) {
+	targetInstance := l.items[l.selectedIdx]
+	return targetInstance.ExecAttach()
 }
 
 // Up selects the prev item in the list.
