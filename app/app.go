@@ -315,7 +315,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save after successful start
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.storage.SaveInstancesForProject(m.projectDir, m.list.GetInstances()); err != nil {
 			return m, m.handleError(err)
 		}
 		if m.autoYes {
@@ -355,7 +355,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
-	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+	if err := m.storage.SaveInstancesForProject(m.projectDir, m.list.GetInstances()); err != nil {
 		return m, m.handleError(err)
 	}
 	return m, tea.Quit
@@ -690,10 +690,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
-		if selected.IsExternal() {
-			return m, m.handleError(fmt.Errorf("cannot kill external session '%s' (managed by Claude Code)", selected.Title))
-		}
-
 		// Create the kill action as a tea.Cmd
 		killAction := func() tea.Msg {
 			// Get worktree and check if branch is checked out

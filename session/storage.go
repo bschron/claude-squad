@@ -94,6 +94,8 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 }
 
 // LoadInstancesForProject loads instances filtered by repository path.
+// Sessions with an empty RepoPath (created before project filtering) are
+// included so they remain visible after upgrade.
 func (s *Storage) LoadInstancesForProject(repoPath string) ([]*Instance, error) {
 	all, err := s.LoadInstances()
 	if err != nil {
@@ -102,11 +104,35 @@ func (s *Storage) LoadInstancesForProject(repoPath string) ([]*Instance, error) 
 	var filtered []*Instance
 	for _, inst := range all {
 		data := inst.ToInstanceData()
-		if data.Worktree.RepoPath == repoPath {
+		if data.Worktree.RepoPath == repoPath || data.Worktree.RepoPath == "" {
 			filtered = append(filtered, inst)
 		}
 	}
 	return filtered, nil
+}
+
+// SaveInstancesForProject saves the project's instances while preserving
+// instances that belong to other projects.
+func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*Instance) error {
+	all, err := s.LoadInstances()
+	if err != nil {
+		// If we can't load existing data, fall back to saving what we have.
+		return s.SaveInstances(projectInstances)
+	}
+
+	// Keep instances from other projects (non-empty, different repo path).
+	var merged []*Instance
+	for _, inst := range all {
+		data := inst.ToInstanceData()
+		if data.Worktree.RepoPath != "" && data.Worktree.RepoPath != repoPath {
+			merged = append(merged, inst)
+		}
+	}
+
+	// Append the current project's instances.
+	merged = append(merged, projectInstances...)
+
+	return s.SaveInstances(merged)
 }
 
 // DeleteInstance removes an instance from storage
