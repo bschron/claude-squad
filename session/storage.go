@@ -55,10 +55,10 @@ func NewStorage(state config.InstanceStorage) (*Storage, error) {
 
 // SaveInstances saves the list of instances to disk
 func (s *Storage) SaveInstances(instances []*Instance) error {
-	// Convert instances to InstanceData
+	// Convert instances to InstanceData, skipping external instances
 	data := make([]InstanceData, 0)
 	for _, instance := range instances {
-		if instance.Started() {
+		if instance.Started() && !instance.IsExternal() {
 			data = append(data, instance.ToInstanceData())
 		}
 	}
@@ -91,6 +91,22 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	}
 
 	return instances, nil
+}
+
+// LoadInstancesForProject loads instances filtered by repository path.
+func (s *Storage) LoadInstancesForProject(repoPath string) ([]*Instance, error) {
+	all, err := s.LoadInstances()
+	if err != nil {
+		return nil, err
+	}
+	var filtered []*Instance
+	for _, inst := range all {
+		data := inst.ToInstanceData()
+		if data.Worktree.RepoPath == repoPath {
+			filtered = append(filtered, inst)
+		}
+	}
+	return filtered, nil
 }
 
 // DeleteInstance removes an instance from storage

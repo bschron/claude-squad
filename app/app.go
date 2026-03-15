@@ -22,9 +22,9 @@ import (
 const GlobalInstanceLimit = 10
 
 // Run is the main entrypoint into the application.
-func Run(ctx context.Context, program string, autoYes bool) error {
+func Run(ctx context.Context, program string, autoYes bool, projectDir string) error {
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		newHome(ctx, program, autoYes, projectDir),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 	)
@@ -51,8 +51,9 @@ type home struct {
 
 	// -- Storage and Configuration --
 
-	program string
-	autoYes bool
+	program    string
+	autoYes    bool
+	projectDir string
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -95,7 +96,7 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 }
 
-func newHome(ctx context.Context, program string, autoYes bool) *home {
+func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
 	// Load application config
 	appConfig := config.LoadConfig()
 
@@ -109,6 +110,13 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		os.Exit(1)
 	}
 
+	// Resolve git repo root for project filtering
+	gitRepoRoot, err := git.FindGitRepoRoot(projectDir)
+	if err != nil {
+		fmt.Printf("Failed to find git repo root: %v\n", err)
+		os.Exit(1)
+	}
+
 	h := &home{
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
@@ -119,13 +127,14 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appConfig:    appConfig,
 		program:      program,
 		autoYes:      autoYes,
+		projectDir:   gitRepoRoot,
 		state:        stateDefault,
 		appState:     appState,
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 
-	// Load saved instances
-	instances, err := storage.LoadInstances()
+	// Load saved instances filtered by current project
+	instances, err := storage.LoadInstancesForProject(gitRepoRoot)
 	if err != nil {
 		fmt.Printf("Failed to load instances: %v\n", err)
 		os.Exit(1)
@@ -140,7 +149,36 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		}
 	}
 
+	// Discover Claude Code worktrees
+	discovered, err := session.DiscoverClaudeWorktrees(projectDir)
+	if err == nil {
+		for _, ds := range discovered {
+			// Skip if an instance with the same title already exists
+			if h.hasInstanceWithTitle(ds.WorktreeName) {
+				continue
+			}
+			extInstance, err := session.NewExternalInstance(ds)
+			if err != nil {
+				log.ErrorLog.Printf("Failed to create external instance %s: %v", ds.WorktreeName, err)
+				continue
+			}
+			h.list.AddInstance(extInstance)()
+		}
+	} else {
+		log.ErrorLog.Printf("Failed to discover Claude Code worktrees: %v", err)
+	}
+
 	return h
+}
+
+// hasInstanceWithTitle checks if any instance in the list has the given title.
+func (m *home) hasInstanceWithTitle(title string) bool {
+	for _, inst := range m.list.GetInstances() {
+		if inst.Title == title {
+			return true
+		}
+	}
+	return false
 }
 
 // updateHandleWindowSizeEvent sets the sizes of the components.
@@ -643,6 +681,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
+		if selected.IsExternal() {
+			return m, m.handleError(fmt.Errorf("cannot kill external session '%s' (managed by Claude Code)", selected.Title))
+		}
 
 		// Create the kill action as a tea.Cmd
 		killAction := func() tea.Msg {
@@ -682,6 +723,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
+		if selected.IsExternal() {
+			return m, m.handleError(fmt.Errorf("cannot push from external session '%s' (managed by Claude Code)", selected.Title))
+		}
 
 		// Create the push action as a tea.Cmd
 		pushAction := func() tea.Msg {
@@ -705,6 +749,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
+		if selected.IsExternal() {
+			return m, m.handleError(fmt.Errorf("cannot checkout external session '%s' (managed by Claude Code)", selected.Title))
+		}
 
 		// Show help screen before pausing
 		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
@@ -719,6 +766,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
+		}
+		if selected.IsExternal() {
+			return m, m.handleError(fmt.Errorf("cannot resume external session '%s' (managed by Claude Code)", selected.Title))
 		}
 		if err := selected.Resume(); err != nil {
 			return m, m.handleError(err)

@@ -65,6 +65,15 @@ type Instance struct {
 	tmuxSession *tmux.TmuxSession
 	// gitWorktree is the git worktree for the instance.
 	gitWorktree *git.GitWorktree
+
+	// isExternal is true for sessions discovered from external tools (e.g. Claude Code --worktree).
+	// External sessions are not persisted to state.json and destructive operations are blocked.
+	isExternal bool
+}
+
+// IsExternal returns true if this instance was discovered from an external tool.
+func (i *Instance) IsExternal() bool {
+	return i.isExternal
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -180,6 +189,47 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		AutoYes:        false,
 		selectedBranch: opts.Branch,
 	}, nil
+}
+
+// NewExternalInstance creates an Instance from a DiscoveredSession.
+// It connects to the existing tmux session and git worktree without owning them.
+func NewExternalInstance(ds DiscoveredSession) (*Instance, error) {
+	t := time.Now()
+
+	tmuxSession := tmux.NewExternalTmuxSession(ds.TmuxSessionName)
+	if !tmuxSession.DoesSessionExist() {
+		return nil, fmt.Errorf("tmux session %s does not exist", ds.TmuxSessionName)
+	}
+
+	gitWorktree := git.NewGitWorktreeFromStorage(
+		ds.RepoPath,
+		ds.WorktreePath,
+		ds.WorktreeName,
+		ds.BranchName,
+		"", // baseCommitSHA computed later via diff
+		true,
+	)
+
+	instance := &Instance{
+		Title:       ds.WorktreeName,
+		Path:        ds.WorktreePath,
+		Branch:      ds.BranchName,
+		Status:      Running,
+		Program:     tmux.ProgramClaude,
+		CreatedAt:   t,
+		UpdatedAt:   t,
+		started:     true,
+		tmuxSession: tmuxSession,
+		gitWorktree: gitWorktree,
+		isExternal:  true,
+	}
+
+	// Connect PTY to the existing tmux session
+	if err := tmuxSession.Restore(); err != nil {
+		return nil, fmt.Errorf("failed to restore external tmux session: %w", err)
+	}
+
+	return instance, nil
 }
 
 func (i *Instance) RepoName() (string, error) {

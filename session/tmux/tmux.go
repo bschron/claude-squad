@@ -86,6 +86,18 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 	}
 }
 
+// NewExternalTmuxSession creates a TmuxSession for an externally-managed tmux session
+// (e.g. one created by Claude Code's --worktree flag). The sessionName is used as-is
+// without adding the claudesquad_ prefix.
+func NewExternalTmuxSession(sessionName string) *TmuxSession {
+	return &TmuxSession{
+		sanitizedName: sessionName,
+		program:       ProgramClaude,
+		ptyFactory:    MakePtyFactory(),
+		cmdExec:       cmd.MakeExecutor(),
+	}
+}
+
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 func (t *TmuxSession) Start(workDir string) error {
