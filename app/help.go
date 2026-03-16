@@ -162,10 +162,14 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 				m.projectConfig.DefaultEffort,
 				m.projectConfig.DefaultModel,
 				m.projectConfig.GetSkipPermissions(),
-				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool) {
+				m.projectConfig.GetSoundAlert(),
+				m.projectConfig.GetAlertSound(),
+				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool, soundAlert bool, alertSound config.SoundOption) {
 					m.projectConfig.DefaultEffort = effort
 					m.projectConfig.DefaultModel = model
 					m.projectConfig.SetSkipPermissions(skipPerms)
+					m.projectConfig.SetSoundAlert(soundAlert)
+					m.projectConfig.AlertSound = alertSound
 					if err := config.SaveProjectConfig(m.projectDir, m.projectConfig); err != nil {
 						log.WarningLog.Printf("Failed to save project config: %v", err)
 					}
