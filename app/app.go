@@ -49,6 +49,8 @@ const (
 	stateConfirm
 	// stateInteractive is the state when user is typing into the tmux session preview.
 	stateInteractive
+	// stateNotes is the state when user is editing a session note.
+	stateNotes
 )
 
 // layoutBounds tracks the screen rectangles of each panel for mouse hit testing.
@@ -541,7 +543,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive || m.state == stateNotes {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -764,6 +766,32 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle notes state
+	if m.state == stateNotes {
+		if msg.String() == "ctrl+c" {
+			m.textInputOverlay = nil
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, tea.WindowSize()
+		}
+
+		shouldClose, _ := m.textInputOverlay.HandleKeyPress(msg)
+		if shouldClose {
+			selected := m.getActiveInstance()
+			if m.textInputOverlay.IsSubmitted() && selected != nil {
+				content := m.textInputOverlay.GetValue()
+				if err := session.SaveNote(m.projectDir, selected.Title, content); err != nil {
+					log.ErrorLog.Printf("failed to save note: %v", err)
+				}
+			}
+			m.textInputOverlay = nil
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, tea.WindowSize()
+		}
+		return m, nil
+	}
+
 	// Handle confirmation state
 	if m.state == stateConfirm {
 		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
@@ -923,6 +951,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				return err
 			}
 
+			// Clean up note file
+			_ = session.DeleteNote(m.projectDir, selected.Title)
+
 			// Then kill the instance
 			m.list.Kill()
 			return instanceChangedMsg{}
@@ -1064,6 +1095,19 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateInteractive)
 		m.tabbedWindow.SetPreviewInteractive(true)
 		return m, nil
+	case keys.KeyNotes:
+		selected := m.getActiveInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		existingContent, err := session.LoadNote(m.projectDir, selected.Title)
+		if err != nil {
+			return m, m.handleError(err)
+		}
+		m.textInputOverlay = overlay.NewTextInputOverlay("Edit Note", existingContent)
+		m.state = stateNotes
+		m.menu.SetState(ui.StateNotes)
+		return m, tea.WindowSize()
 	case keys.KeyKanban:
 		m.kanbanVisible = !m.kanbanVisible
 		m.menu.SetKanbanVisible(m.kanbanVisible)
@@ -1349,7 +1393,7 @@ func (m *home) View() string {
 		m.errBox.String(),
 	)
 
-	if m.state == statePrompt {
+	if m.state == statePrompt || m.state == stateNotes {
 		if m.textInputOverlay == nil {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}

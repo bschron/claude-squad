@@ -41,6 +41,7 @@ const (
 	StateNewInstance
 	StatePrompt
 	StateInteractive
+	StateNotes
 )
 
 // optionPosition stores the X-range of a rendered menu option for click detection.
@@ -112,7 +113,7 @@ func (m *Menu) SetState(state MenuState) {
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
 	// Only change the state if we're not in a special state (NewInstance or Prompt)
-	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateInteractive {
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateInteractive && m.state != StateNotes {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -147,6 +148,8 @@ func (m *Menu) updateOptions() {
 		m.options = promptMenuOptions
 	case StateInteractive:
 		m.options = interactiveMenuOptions
+	case StateNotes:
+		m.options = promptMenuOptions
 	}
 }
 
@@ -160,7 +163,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Instance management group
-	instanceGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	instanceGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyNotes}
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
