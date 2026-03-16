@@ -90,6 +90,8 @@ type home struct {
 	promptAfterName bool
 	// pendingExecAttach stores a tea.ExecCommand when a help screen must be shown before attaching
 	pendingExecAttach tea.ExecCommand
+	// pendingConfirmAction stores the action to execute after confirmation dialog is accepted
+	pendingConfirmAction tea.Cmd
 
 	// keySent is used to manage underlining menu items
 	keySent bool
@@ -806,7 +808,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if shouldClose {
 			m.state = stateDefault
 			m.confirmationOverlay = nil
-			return m, nil
+			cmd := m.pendingConfirmAction
+			m.pendingConfirmAction = nil
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -1305,6 +1309,7 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 // confirmAction shows a confirmation modal and stores the action to execute on confirm
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
+	m.pendingConfirmAction = action
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
@@ -1314,14 +1319,11 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	// Set callbacks for confirmation and cancellation
 	m.confirmationOverlay.OnConfirm = func() {
 		m.state = stateDefault
-		// Execute the action if it exists
-		if action != nil {
-			_ = action()
-		}
 	}
 
 	m.confirmationOverlay.OnCancel = func() {
 		m.state = stateDefault
+		m.pendingConfirmAction = nil
 	}
 
 	return nil

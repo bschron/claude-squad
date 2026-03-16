@@ -278,32 +278,16 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 	}
 
 	t.Run("works with simple action returning nil", func(t *testing.T) {
-		actionCalled := false
 		action := func() tea.Msg {
-			actionCalled = true
 			return nil
 		}
 
-		// Set up callback to track action execution
-		actionExecuted := false
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Test action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			actionExecuted = true
-			action() // Execute the action
-		}
-		h.state = stateConfirm
+		h.confirmAction("Test action?", action)
 
-		// Verify state was set
+		// Verify state and pending action were set
 		assert.Equal(t, stateConfirm, h.state)
 		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
-
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		assert.True(t, actionCalled)
-		assert.True(t, actionExecuted)
+		assert.NotNil(t, h.pendingConfirmAction)
 	})
 
 	t.Run("works with action returning error", func(t *testing.T) {
@@ -312,24 +296,16 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 			return expectedErr
 		}
 
-		// Set up callback to track action execution
-		var receivedMsg tea.Msg
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Error action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			receivedMsg = action() // Execute the action and capture result
-		}
-		h.state = stateConfirm
+		h.confirmAction("Error action?", action)
 
-		// Verify state was set
+		// Verify state and pending action were set
 		assert.Equal(t, stateConfirm, h.state)
 		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+		assert.NotNil(t, h.pendingConfirmAction)
 
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		assert.Equal(t, expectedErr, receivedMsg)
+		// Execute the pending action and verify the result
+		msg := h.pendingConfirmAction()
+		assert.Equal(t, expectedErr, msg)
 	})
 
 	t.Run("works with action returning custom message", func(t *testing.T) {
@@ -337,25 +313,30 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 			return instanceChangedMsg{}
 		}
 
-		// Set up callback to track action execution
-		var receivedMsg tea.Msg
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Custom message action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			receivedMsg = action() // Execute the action and capture result
-		}
-		h.state = stateConfirm
+		h.confirmAction("Custom message action?", action)
 
-		// Verify state was set
+		// Verify state and pending action were set
 		assert.Equal(t, stateConfirm, h.state)
 		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+		assert.NotNil(t, h.pendingConfirmAction)
 
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		_, ok := receivedMsg.(instanceChangedMsg)
-		assert.True(t, ok, "Expected instanceChangedMsg but got %T", receivedMsg)
+		// Execute the pending action and verify the result
+		msg := h.pendingConfirmAction()
+		_, ok := msg.(instanceChangedMsg)
+		assert.True(t, ok, "Expected instanceChangedMsg but got %T", msg)
+	})
+
+	t.Run("cancel clears pending action", func(t *testing.T) {
+		action := func() tea.Msg {
+			return nil
+		}
+
+		h.confirmAction("Cancel test?", action)
+		assert.NotNil(t, h.pendingConfirmAction)
+
+		// Simulate cancellation
+		h.confirmationOverlay.OnCancel()
+		assert.Nil(t, h.pendingConfirmAction)
 	})
 }
 
@@ -374,20 +355,13 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		return nil
 	}
 
-	// Set up first confirmation
-	h.confirmationOverlay = overlay.NewConfirmationOverlay("First action?")
-	firstOnConfirm := func() {
-		h.state = stateDefault
-		action1()
-	}
-	h.confirmationOverlay.OnConfirm = firstOnConfirm
-	h.state = stateConfirm
+	// Set up first confirmation via confirmAction
+	h.confirmAction("First action?", action1)
 
 	// Verify first confirmation
 	assert.Equal(t, stateConfirm, h.state)
 	assert.NotNil(t, h.confirmationOverlay)
-	assert.False(t, h.confirmationOverlay.Dismissed)
-	assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+	assert.NotNil(t, h.pendingConfirmAction)
 
 	// Cancel first confirmation (simulate pressing 'n')
 	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}
@@ -397,6 +371,9 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		h.confirmationOverlay = nil
 	}
 
+	// Pending action should be cleared on cancel
+	assert.Nil(t, h.pendingConfirmAction)
+
 	// Second confirmation with different action
 	action2Called := false
 	action2 := func() tea.Msg {
@@ -404,33 +381,21 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		return fmt.Errorf("action2 error")
 	}
 
-	// Set up second confirmation
-	h.confirmationOverlay = overlay.NewConfirmationOverlay("Second action?")
-	var secondResult tea.Msg
-	secondOnConfirm := func() {
-		h.state = stateDefault
-		secondResult = action2()
-	}
-	h.confirmationOverlay.OnConfirm = secondOnConfirm
-	h.state = stateConfirm
+	// Set up second confirmation via confirmAction
+	h.confirmAction("Second action?", action2)
 
 	// Verify second confirmation
 	assert.Equal(t, stateConfirm, h.state)
 	assert.NotNil(t, h.confirmationOverlay)
-	assert.False(t, h.confirmationOverlay.Dismissed)
-	assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+	assert.NotNil(t, h.pendingConfirmAction)
 
-	// Execute second action to verify it's the correct one
-	h.confirmationOverlay.OnConfirm()
-	err, ok := secondResult.(error)
+	// Execute the pending action to verify it's the correct one
+	msg := h.pendingConfirmAction()
+	err, ok := msg.(error)
 	assert.True(t, ok)
 	assert.Equal(t, "action2 error", err.Error())
 	assert.True(t, action2Called)
 	assert.False(t, action1Called, "First action should not have been called")
-
-	// Test that cancelled action can still be executed independently
-	firstOnConfirm()
-	assert.True(t, action1Called, "First action should be callable after being replaced")
 }
 
 // TestConfirmationModalVisualAppearance tests that confirmation modal has distinct visual appearance
