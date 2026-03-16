@@ -33,17 +33,20 @@ var (
 
 // TextInputOverlay represents a text input overlay with state management.
 type TextInputOverlay struct {
-	textarea      textarea.Model
-	Title         string
-	FocusIndex    int // index into focusable stops
-	Submitted     bool
-	Canceled      bool
-	OnSubmit      func()
-	width         int
-	height        int
-	profilePicker *ProfilePicker
-	branchPicker  *BranchPicker
-	numStops      int // total number of focus stops
+	textarea         textarea.Model
+	Title            string
+	FocusIndex       int // index into focusable stops
+	Submitted        bool
+	Canceled         bool
+	OnSubmit         func()
+	width            int
+	height           int
+	profilePicker    *ProfilePicker
+	effortPicker     *EffortPicker
+	modelPicker      *ModelPicker
+	permissionToggle *PermissionToggle
+	branchPicker     *BranchPicker
+	numStops         int // total number of focus stops
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.
@@ -58,26 +61,40 @@ func NewTextInputOverlay(title string, initialValue string) *TextInputOverlay {
 
 // NewTextInputOverlayWithBranchPicker creates a text input overlay that includes an
 // empty branch picker. Results are populated asynchronously via SetBranchResults.
-func NewTextInputOverlayWithBranchPicker(title string, initialValue string, profiles []config.Profile) *TextInputOverlay {
+func NewTextInputOverlayWithBranchPicker(
+	title string,
+	initialValue string,
+	profiles []config.Profile,
+	defaultEffort config.EffortLevel,
+	defaultModel config.ModelOption,
+	defaultSkipPerms bool,
+) *TextInputOverlay {
 	ti := newTextarea(initialValue)
 	bp := NewBranchPicker()
+	ep := NewEffortPicker(defaultEffort)
+	mp := NewModelPicker(defaultModel)
+	pt := NewPermissionToggle(defaultSkipPerms)
 
 	var pp *ProfilePicker
 	if len(profiles) > 0 {
 		pp = NewProfilePicker(profiles)
 	}
 
-	numStops := 3 // textarea + branch picker + enter button
+	// Focus stops: [profilePicker] + effortPicker + modelPicker + permissionToggle + textarea + branchPicker + enterButton
+	numStops := 6 // effort + model + permission + textarea + branch + enter
 	if pp != nil && pp.HasMultiple() {
-		numStops = 4 // profile picker + textarea + branch picker + enter button
+		numStops = 7 // profile + effort + model + permission + textarea + branch + enter
 	}
 
 	overlay := &TextInputOverlay{
-		textarea:      ti,
-		Title:         title,
-		profilePicker: pp,
-		branchPicker:  bp,
-		numStops:      numStops,
+		textarea:         ti,
+		Title:            title,
+		profilePicker:    pp,
+		effortPicker:     ep,
+		modelPicker:      mp,
+		permissionToggle: pt,
+		branchPicker:     bp,
+		numStops:         numStops,
 	}
 	overlay.updateFocusState()
 	return overlay
@@ -99,11 +116,21 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 	t.textarea.SetHeight(height)
 	t.width = width
 	t.height = height
+	innerWidth := width - 6
 	if t.branchPicker != nil {
-		t.branchPicker.SetWidth(width - 6)
+		t.branchPicker.SetWidth(innerWidth)
 	}
 	if t.profilePicker != nil {
-		t.profilePicker.SetWidth(width - 6)
+		t.profilePicker.SetWidth(innerWidth)
+	}
+	if t.effortPicker != nil {
+		t.effortPicker.SetWidth(innerWidth)
+	}
+	if t.modelPicker != nil {
+		t.modelPicker.SetWidth(innerWidth)
+	}
+	if t.permissionToggle != nil {
+		t.permissionToggle.SetWidth(innerWidth)
 	}
 }
 
@@ -117,17 +144,77 @@ func (t *TextInputOverlay) View() string {
 	return t.Render()
 }
 
+// pickerOffset returns the number of picker stops before the textarea.
+func (t *TextInputOverlay) pickerOffset() int {
+	offset := 0
+	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
+		offset++
+	}
+	if t.effortPicker != nil {
+		offset++
+	}
+	if t.modelPicker != nil {
+		offset++
+	}
+	if t.permissionToggle != nil {
+		offset++
+	}
+	return offset
+}
+
 // isProfilePicker returns true if the current focus is on the profile picker.
 func (t *TextInputOverlay) isProfilePicker() bool {
 	return t.profilePicker != nil && t.profilePicker.HasMultiple() && t.FocusIndex == 0
 }
 
+// isEffortPicker returns true if the current focus is on the effort picker.
+func (t *TextInputOverlay) isEffortPicker() bool {
+	if t.effortPicker == nil {
+		return false
+	}
+	idx := 0
+	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
+		idx = 1
+	}
+	return t.FocusIndex == idx
+}
+
+// isModelPicker returns true if the current focus is on the model picker.
+func (t *TextInputOverlay) isModelPicker() bool {
+	if t.modelPicker == nil {
+		return false
+	}
+	idx := 0
+	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
+		idx++
+	}
+	if t.effortPicker != nil {
+		idx++
+	}
+	return t.FocusIndex == idx
+}
+
+// isPermissionToggle returns true if the current focus is on the permission toggle.
+func (t *TextInputOverlay) isPermissionToggle() bool {
+	if t.permissionToggle == nil {
+		return false
+	}
+	idx := 0
+	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
+		idx++
+	}
+	if t.effortPicker != nil {
+		idx++
+	}
+	if t.modelPicker != nil {
+		idx++
+	}
+	return t.FocusIndex == idx
+}
+
 // isTextarea returns true if the current focus is on the textarea.
 func (t *TextInputOverlay) isTextarea() bool {
-	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
-		return t.FocusIndex == 1
-	}
-	return t.FocusIndex == 0
+	return t.FocusIndex == t.pickerOffset()
 }
 
 // isEnterButton returns true if the current focus is on the enter button.
@@ -140,10 +227,7 @@ func (t *TextInputOverlay) isBranchPicker() bool {
 	if t.branchPicker == nil {
 		return false
 	}
-	if t.profilePicker != nil && t.profilePicker.HasMultiple() {
-		return t.FocusIndex == 2
-	}
-	return t.FocusIndex == 1
+	return t.FocusIndex == t.numStops-2
 }
 
 // setFocusIndex sets the focus index and syncs focus state.
@@ -152,7 +236,7 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 	t.updateFocusState()
 }
 
-// updateFocusState syncs the textarea/branchPicker/profilePicker focus/blur state.
+// updateFocusState syncs the focus/blur state for all components.
 func (t *TextInputOverlay) updateFocusState() {
 	if t.isTextarea() {
 		t.textarea.Focus()
@@ -171,6 +255,27 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.profilePicker.Focus()
 		} else {
 			t.profilePicker.Blur()
+		}
+	}
+	if t.effortPicker != nil {
+		if t.isEffortPicker() {
+			t.effortPicker.Focus()
+		} else {
+			t.effortPicker.Blur()
+		}
+	}
+	if t.modelPicker != nil {
+		if t.isModelPicker() {
+			t.modelPicker.Focus()
+		} else {
+			t.modelPicker.Blur()
+		}
+	}
+	if t.permissionToggle != nil {
+		if t.isPermissionToggle() {
+			t.permissionToggle.Focus()
+		} else {
+			t.permissionToggle.Blur()
 		}
 	}
 }
@@ -201,8 +306,8 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.setFocusIndex(t.numStops - 1)
 			return false, false
 		}
-		if t.isProfilePicker() {
-			// Enter on profile picker = advance to textarea
+		if t.isEffortPicker() || t.isModelPicker() || t.isPermissionToggle() || t.isProfilePicker() {
+			// Enter on any picker = advance to next stop
 			t.setFocusIndex(t.FocusIndex + 1)
 			return false, false
 		}
@@ -214,6 +319,24 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 	default:
 		if t.isTextarea() {
 			t.textarea, _ = t.textarea.Update(msg)
+			return false, false
+		}
+		if t.isEffortPicker() {
+			if msg.Type == tea.KeyLeft || msg.Type == tea.KeyRight {
+				t.effortPicker.HandleKeyPress(msg)
+			}
+			return false, false
+		}
+		if t.isModelPicker() {
+			if msg.Type == tea.KeyLeft || msg.Type == tea.KeyRight {
+				t.modelPicker.HandleKeyPress(msg)
+			}
+			return false, false
+		}
+		if t.isPermissionToggle() {
+			if msg.Type == tea.KeyLeft || msg.Type == tea.KeyRight {
+				t.permissionToggle.HandleKeyPress(msg)
+			}
 			return false, false
 		}
 		if t.isProfilePicker() {
@@ -242,6 +365,33 @@ func (t *TextInputOverlay) GetSelectedBranch() string {
 		return ""
 	}
 	return t.branchPicker.GetSelectedBranch()
+}
+
+// GetSelectedEffort returns the selected effort level from the effort picker.
+// Returns empty string if no effort picker is present.
+func (t *TextInputOverlay) GetSelectedEffort() config.EffortLevel {
+	if t.effortPicker == nil {
+		return ""
+	}
+	return t.effortPicker.GetSelectedEffort()
+}
+
+// GetSelectedModel returns the selected model option from the model picker.
+// Returns empty string (ModelDefault) if no model picker is present.
+func (t *TextInputOverlay) GetSelectedModel() config.ModelOption {
+	if t.modelPicker == nil {
+		return config.ModelDefault
+	}
+	return t.modelPicker.GetSelectedModel()
+}
+
+// GetSkipPermissions returns the skip permissions toggle value.
+// Returns true if no permission toggle is present (default behavior).
+func (t *TextInputOverlay) GetSkipPermissions() bool {
+	if t.permissionToggle == nil {
+		return true
+	}
+	return t.permissionToggle.GetSkipPermissions()
 }
 
 // GetSelectedProgram returns the program string from the selected profile.
@@ -314,6 +464,24 @@ func (t *TextInputOverlay) Render() string {
 	// Render profile picker if present, above the prompt
 	if t.profilePicker != nil {
 		content += t.profilePicker.Render() + "\n\n"
+		content += divider + "\n\n"
+	}
+
+	// Render effort picker if present
+	if t.effortPicker != nil {
+		content += t.effortPicker.Render() + "\n\n"
+		content += divider + "\n\n"
+	}
+
+	// Render model picker if present
+	if t.modelPicker != nil {
+		content += t.modelPicker.Render() + "\n\n"
+		content += divider + "\n\n"
+	}
+
+	// Render permission toggle if present
+	if t.permissionToggle != nil {
+		content += t.permissionToggle.Render() + "\n\n"
 		content += divider + "\n\n"
 	}
 

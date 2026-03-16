@@ -16,6 +16,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// buildStartProgram consolidates the program string with flags for Claude.
+func (i *Instance) buildStartProgram(extraFlags ...string) string {
+	prog := i.Program
+	if isClaudeProgram(prog) {
+		for _, f := range extraFlags {
+			prog += " " + f
+		}
+		if i.SkipPermissions {
+			prog += " --dangerously-skip-permissions"
+		}
+		if i.Effort != "" {
+			prog += " --effort " + string(i.Effort)
+		}
+		if i.Model != "" {
+			prog += " --model " + string(i.Model)
+		}
+	}
+	return prog
+}
+
 type Status int
 
 const (
@@ -53,6 +73,12 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// Effort is the effort level for Claude Code (low, medium, high, max)
+	Effort config.EffortLevel
+	// Model is the model option for Claude Code (sonnet, opus, haiku, or empty for default)
+	Model config.ModelOption
+	// SkipPermissions controls whether --dangerously-skip-permissions is passed
+	SkipPermissions bool
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -80,17 +106,21 @@ func (i *Instance) IsExternal() bool {
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
+	skipPerms := i.SkipPermissions
 	data := InstanceData{
-		Title:     i.Title,
-		Path:      i.Path,
-		Branch:    i.Branch,
-		Status:    i.Status,
-		Height:    i.Height,
-		Width:     i.Width,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: time.Now(),
-		Program:   i.Program,
-		AutoYes:   i.AutoYes,
+		Title:           i.Title,
+		Path:            i.Path,
+		Branch:          i.Branch,
+		Status:          i.Status,
+		Height:          i.Height,
+		Width:           i.Width,
+		CreatedAt:       i.CreatedAt,
+		UpdatedAt:       time.Now(),
+		Program:         i.Program,
+		AutoYes:         i.AutoYes,
+		Effort:          i.Effort,
+		Model:           i.Model,
+		SkipPermissions: &skipPerms,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -119,16 +149,25 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
+	// Backward compat: legacy sessions without skip_permissions default to true
+	skipPerms := true
+	if data.SkipPermissions != nil {
+		skipPerms = *data.SkipPermissions
+	}
+
 	instance := &Instance{
-		Title:     data.Title,
-		Path:      data.Path,
-		Branch:    data.Branch,
-		Status:    data.Status,
-		Height:    data.Height,
-		Width:     data.Width,
-		CreatedAt: data.CreatedAt,
-		UpdatedAt: data.UpdatedAt,
-		Program:   data.Program,
+		Title:           data.Title,
+		Path:            data.Path,
+		Branch:          data.Branch,
+		Status:          data.Status,
+		Height:          data.Height,
+		Width:           data.Width,
+		CreatedAt:       data.CreatedAt,
+		UpdatedAt:       data.UpdatedAt,
+		Program:         data.Program,
+		Effort:          data.Effort,
+		Model:           data.Model,
+		SkipPermissions: skipPerms,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -327,10 +366,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 
 		// Build program with flags for Claude
-		startProgram := i.Program
-		if isClaudeProgram(i.Program) {
-			startProgram = i.Program + " --dangerously-skip-permissions"
-		}
+		startProgram := i.buildStartProgram()
 
 		// Create new session
 		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {
@@ -583,10 +619,7 @@ func (i *Instance) Resume() error {
 	}
 
 	// Build program with flags for Claude
-	startProgram := i.Program
-	if isClaudeProgram(i.Program) {
-		startProgram = i.Program + " --dangerously-skip-permissions"
-	}
+	startProgram := i.buildStartProgram()
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {
@@ -636,10 +669,7 @@ func (i *Instance) Revive() error {
 	}
 
 	// Build program with --continue flag for Claude so it picks up the previous conversation
-	startProgram := i.Program
-	if isClaudeProgram(i.Program) {
-		startProgram = i.Program + " --continue --dangerously-skip-permissions"
-	}
+	startProgram := i.buildStartProgram("--continue")
 
 	// Create new tmux session in the existing worktree directory
 	if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {

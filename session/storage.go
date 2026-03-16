@@ -17,7 +17,10 @@ type InstanceData struct {
 	Width     int       `json:"width"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	AutoYes   bool      `json:"auto_yes"`
+	AutoYes         bool                `json:"auto_yes"`
+	Effort          config.EffortLevel  `json:"effort,omitempty"`
+	Model           config.ModelOption  `json:"model,omitempty"`
+	SkipPermissions *bool               `json:"skip_permissions,omitempty"`
 
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`

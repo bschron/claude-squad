@@ -1,6 +1,7 @@
 package app
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/ui"
@@ -152,8 +153,29 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 			log.WarningLog.Printf("Failed to save help screen state: %v", err)
 		}
 
-		content := helpType.toContent()
+		// Use HelpOverlay for general help (with configs section)
+		if _, ok := helpType.(helpTypeGeneral); ok {
+			content := helpType.toContent()
+			m.helpOverlay = overlay.NewHelpOverlay(
+				content,
+				m.projectConfig.DefaultEffort,
+				m.projectConfig.DefaultModel,
+				m.projectConfig.GetSkipPermissions(),
+				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool) {
+					m.projectConfig.DefaultEffort = effort
+					m.projectConfig.DefaultModel = model
+					m.projectConfig.SetSkipPermissions(skipPerms)
+					if err := config.SaveProjectConfig(m.projectDir, m.projectConfig); err != nil {
+						log.WarningLog.Printf("Failed to save project config: %v", err)
+					}
+				},
+			)
+			m.helpOverlay.SetWidth(int(float32(m.bounds.preview.Width+m.bounds.list.Width+m.bounds.kanban.Width) * 0.6))
+			m.state = stateHelp
+			return m, nil
+		}
 
+		content := helpType.toContent()
 		m.textOverlay = overlay.NewTextOverlay(content)
 		m.textOverlay.OnDismiss = onDismiss
 		m.state = stateHelp
@@ -169,6 +191,23 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 
 // handleHelpState handles key events when in help state
 func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check if we're using the HelpOverlay (general help with configs)
+	if m.helpOverlay != nil {
+		shouldClose := m.helpOverlay.HandleKeyPress(msg)
+		if shouldClose {
+			m.helpOverlay = nil
+			m.state = stateDefault
+			return m, tea.Sequence(
+				tea.WindowSize(),
+				func() tea.Msg {
+					m.menu.SetState(ui.StateDefault)
+					return nil
+				},
+			)
+		}
+		return m, nil
+	}
+
 	// Any key press will close the help overlay
 	shouldClose := m.textOverlay.HandleKeyPress(msg)
 	if shouldClose {

@@ -113,8 +113,12 @@ type home struct {
 	textInputOverlay *overlay.TextInputOverlay
 	// textOverlay displays text information
 	textOverlay *overlay.TextOverlay
+	// helpOverlay displays the general help screen with editable configs
+	helpOverlay *overlay.HelpOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// projectConfig stores per-project configuration (e.g. default effort level)
+	projectConfig *config.ProjectConfig
 }
 
 func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
@@ -138,19 +142,23 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 		os.Exit(1)
 	}
 
+	// Load per-project configuration
+	projectConfig := config.LoadProjectConfig(gitRepoRoot)
+
 	h := &home{
-		ctx:          ctx,
-		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
-		errBox:       ui.NewErrBox(),
-		storage:      storage,
-		appConfig:    appConfig,
-		program:      program,
-		autoYes:      autoYes,
-		projectDir:   gitRepoRoot,
-		state:        stateDefault,
-		appState:     appState,
+		ctx:           ctx,
+		spinner:       spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		menu:          ui.NewMenu(),
+		tabbedWindow:  ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		errBox:        ui.NewErrBox(),
+		storage:       storage,
+		appConfig:     appConfig,
+		program:       program,
+		autoYes:       autoYes,
+		projectDir:    gitRepoRoot,
+		state:         stateDefault,
+		appState:      appState,
+		projectConfig: projectConfig,
 	}
 	h.kanban = ui.NewKanbanBoard(&h.spinner)
 	h.list = ui.NewList(&h.spinner, autoYes)
@@ -260,6 +268,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	}
 	if m.textOverlay != nil {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
+	}
+	if m.helpOverlay != nil {
+		m.helpOverlay.SetWidth(int(float32(msg.Width) * 0.6))
 	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
@@ -606,6 +617,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 
 			// Set Loading status and finalize into the list immediately
+			instance.Effort = m.projectConfig.DefaultEffort
+			instance.Model = m.projectConfig.DefaultModel
+			instance.SkipPermissions = m.projectConfig.GetSkipPermissions()
 			instance.SetStatus(session.Loading)
 			m.newInstanceFinalizer()
 			m.promptAfterName = false
@@ -681,6 +695,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				prompt := m.textInputOverlay.GetValue()
 				selectedBranch := m.textInputOverlay.GetSelectedBranch()
 				selectedProgram := m.textInputOverlay.GetSelectedProgram()
+				selectedEffort := m.textInputOverlay.GetSelectedEffort()
+
+				selectedModel := m.textInputOverlay.GetSelectedModel()
+				selectedSkipPerms := m.textInputOverlay.GetSkipPermissions()
 
 				if !selected.Started() {
 					// Shift+N flow: instance not started yet — set branch, start, then send prompt
@@ -690,6 +708,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					if selectedProgram != "" {
 						selected.Program = selectedProgram
 					}
+					if selectedEffort != "" {
+						selected.Effort = selectedEffort
+					}
+					selected.Model = selectedModel
+					selected.SkipPermissions = selectedSkipPerms
 					selected.Prompt = prompt
 
 					// Finalize into list and start
@@ -1192,7 +1215,13 @@ func (m *home) handleError(err error) tea.Cmd {
 }
 
 func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
-	return overlay.NewTextInputOverlayWithBranchPicker("Enter prompt", "", m.appConfig.GetProfiles())
+	return overlay.NewTextInputOverlayWithBranchPicker(
+		"Enter prompt", "",
+		m.appConfig.GetProfiles(),
+		m.projectConfig.DefaultEffort,
+		m.projectConfig.DefaultModel,
+		m.projectConfig.GetSkipPermissions(),
+	)
 }
 
 // cancelPromptOverlay cancels the prompt overlay, cleaning up unstarted instances.
@@ -1326,6 +1355,9 @@ func (m *home) View() string {
 		}
 		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true, true)
 	} else if m.state == stateHelp {
+		if m.helpOverlay != nil {
+			return overlay.PlaceOverlay(0, 0, m.helpOverlay.Render(), mainView, true, true)
+		}
 		if m.textOverlay == nil {
 			log.ErrorLog.Printf("text overlay is nil")
 		}
