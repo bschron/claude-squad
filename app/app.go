@@ -946,9 +946,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Clean up terminal session for this instance
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
 
-			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
-				return err
+			// Delete from storage (skip for external sessions - they aren't persisted)
+			if !selected.IsExternal() {
+				if err := m.storage.DeleteInstance(selected.Title); err != nil {
+					return err
+				}
 			}
 
 			// Clean up note file
