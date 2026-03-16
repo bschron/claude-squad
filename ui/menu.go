@@ -40,6 +40,7 @@ const (
 	StateEmpty
 	StateNewInstance
 	StatePrompt
+	StateInteractive
 )
 
 // optionPosition stores the X-range of a rendered menu option for click detection.
@@ -74,6 +75,7 @@ type Menu struct {
 var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
+var interactiveMenuOptions = []keys.KeyName{}
 
 func NewMenu() *Menu {
 	return &Menu{
@@ -110,7 +112,7 @@ func (m *Menu) SetState(state MenuState) {
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
 	// Only change the state if we're not in a special state (NewInstance or Prompt)
-	if m.state != StateNewInstance && m.state != StatePrompt {
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateInteractive {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -143,6 +145,8 @@ func (m *Menu) updateOptions() {
 		m.options = newInstanceMenuOptions
 	case StatePrompt:
 		m.options = promptMenuOptions
+	case StateInteractive:
+		m.options = interactiveMenuOptions
 	}
 }
 
@@ -216,6 +220,12 @@ func (m *Menu) SetSize(width, height int) {
 }
 
 func (m *Menu) String() string {
+	if m.state == StateInteractive {
+		hint := descStyle.Render("ESC") + sepStyle.Render(" exit interactive")
+		centeredHint := menuStyle.Render(hint)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredHint)
+	}
+
 	var s strings.Builder
 
 	// Track option positions for click detection.

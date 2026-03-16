@@ -16,9 +16,10 @@ type PreviewPane struct {
 	width  int
 	height int
 
-	previewState previewState
-	isScrolling  bool
-	viewport     viewport.Model
+	previewState  previewState
+	isScrolling   bool
+	isInteractive bool
+	viewport      viewport.Model
 }
 
 type previewState struct {
@@ -166,6 +167,11 @@ func (p *PreviewPane) String() string {
 	// Calculate available height accounting for border and margin
 	availableHeight := p.height - 1 //  1 for ellipsis
 
+	// Reserve a line for the interactive footer
+	if p.isInteractive {
+		availableHeight--
+	}
+
 	lines := strings.Split(p.previewState.text, "\n")
 
 	// Truncate if we have more lines than available height
@@ -180,9 +186,28 @@ func (p *PreviewPane) String() string {
 		}
 	}
 
+	// Append the interactive mode footer
+	if p.isInteractive {
+		footer := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FF00")).
+			Bold(true).
+			Render("INTERACTIVE (ESC to exit)")
+		lines = append(lines, footer)
+	}
+
 	content := strings.Join(lines, "\n")
 	rendered := previewPaneStyle.Width(p.width).Render(content)
 	return rendered
+}
+
+// SetInteractive sets whether the preview is in interactive mode
+func (p *PreviewPane) SetInteractive(interactive bool) {
+	p.isInteractive = interactive
+}
+
+// IsInteractive returns whether the preview is in interactive mode
+func (p *PreviewPane) IsInteractive() bool {
+	return p.isInteractive
 }
 
 // ScrollUp scrolls up in the viewport

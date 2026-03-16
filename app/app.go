@@ -47,6 +47,8 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateInteractive is the state when user is typing into the tmux session preview.
+	stateInteractive
 )
 
 // layoutBounds tracks the screen rectangles of each panel for mouse hit testing.
@@ -410,6 +412,117 @@ func (m *home) handleQuit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// handleInteractiveState handles key events in interactive mode, forwarding them to the tmux session.
+func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Escape exits interactive mode
+	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		m.tabbedWindow.SetPreviewInteractive(false)
+		return m, nil
+	}
+
+	selected := m.getActiveInstance()
+	if selected == nil || !selected.TmuxAlive() {
+		// Instance died, exit interactive mode
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		m.tabbedWindow.SetPreviewInteractive(false)
+		return m, nil
+	}
+
+	translated := translateKeyMsg(msg)
+	if translated != "" {
+		if err := selected.SendKeys(translated); err != nil {
+			log.ErrorLog.Printf("interactive send keys failed: %v", err)
+		}
+	}
+	return m, nil
+}
+
+// translateKeyMsg converts a bubbletea KeyMsg into the byte string to send to a tmux PTY.
+func translateKeyMsg(msg tea.KeyMsg) string {
+	switch msg.Type {
+	case tea.KeyRunes:
+		return string(msg.Runes)
+	case tea.KeyEnter:
+		return "\r"
+	case tea.KeyBackspace:
+		return "\x7f"
+	case tea.KeyTab:
+		return "\t"
+	case tea.KeySpace:
+		return " "
+	case tea.KeyUp:
+		return "\x1b[A"
+	case tea.KeyDown:
+		return "\x1b[B"
+	case tea.KeyRight:
+		return "\x1b[C"
+	case tea.KeyLeft:
+		return "\x1b[D"
+	case tea.KeyCtrlA:
+		return "\x01"
+	case tea.KeyCtrlB:
+		return "\x02"
+	case tea.KeyCtrlD:
+		return "\x04"
+	case tea.KeyCtrlE:
+		return "\x05"
+	case tea.KeyCtrlF:
+		return "\x06"
+	case tea.KeyCtrlG:
+		return "\x07"
+	case tea.KeyCtrlH:
+		return "\x08"
+	case tea.KeyCtrlJ:
+		return "\x0a"
+	case tea.KeyCtrlK:
+		return "\x0b"
+	case tea.KeyCtrlL:
+		return "\x0c"
+	case tea.KeyCtrlN:
+		return "\x0e"
+	case tea.KeyCtrlO:
+		return "\x0f"
+	case tea.KeyCtrlP:
+		return "\x10"
+	case tea.KeyCtrlQ:
+		return "\x11"
+	case tea.KeyCtrlR:
+		return "\x12"
+	case tea.KeyCtrlS:
+		return "\x13"
+	case tea.KeyCtrlT:
+		return "\x14"
+	case tea.KeyCtrlU:
+		return "\x15"
+	case tea.KeyCtrlV:
+		return "\x16"
+	case tea.KeyCtrlW:
+		return "\x17"
+	case tea.KeyCtrlX:
+		return "\x18"
+	case tea.KeyCtrlY:
+		return "\x19"
+	case tea.KeyCtrlZ:
+		return "\x1a"
+	case tea.KeyDelete:
+		return "\x1b[3~"
+	case tea.KeyHome:
+		return "\x1b[H"
+	case tea.KeyEnd:
+		return "\x1b[F"
+	default:
+		// For any unhandled key type, try the string representation
+		s := msg.String()
+		if len(s) == 1 {
+			return s
+		}
+		return ""
+	}
+}
+
 func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly bool) {
 	// Handle menu highlighting when you press a button. We intercept it here and immediately return to
 	// update the ui while re-sending the keypress. Then, on the next call to this, we actually handle the keypress.
@@ -417,7 +530,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -452,6 +565,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
+	}
+
+	if m.state == stateInteractive {
+		return m.handleInteractiveState(msg)
 	}
 
 	if m.state == stateNew {
@@ -906,6 +1023,24 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		// Help already seen, attach directly
 		return m, attachCmd
+	case keys.KeyInteractive:
+		selected := m.getActiveInstance()
+		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+			return m, nil
+		}
+		if !m.tabbedWindow.IsInPreviewTab() {
+			return m, nil
+		}
+		// Exit scroll mode if active
+		if m.tabbedWindow.IsPreviewInScrollMode() {
+			if err := m.tabbedWindow.ResetPreviewToNormalMode(selected); err != nil {
+				return m, m.handleError(err)
+			}
+		}
+		m.state = stateInteractive
+		m.menu.SetState(ui.StateInteractive)
+		m.tabbedWindow.SetPreviewInteractive(true)
+		return m, nil
 	case keys.KeyKanban:
 		m.kanbanVisible = !m.kanbanVisible
 		m.menu.SetKanbanVisible(m.kanbanVisible)
@@ -1129,6 +1264,9 @@ func (m *home) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 
 // handleMouseWheel routes scroll wheel events to the appropriate panel.
 func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, tea.Cmd) {
+	if m.state == stateInteractive {
+		return m, nil
+	}
 	delta := 1
 	if button == tea.MouseButtonWheelUp {
 		delta = -1

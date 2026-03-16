@@ -221,6 +221,16 @@ func (w *TabbedWindow) ResetTerminalToNormalMode() {
 	w.terminal.ResetToNormalMode()
 }
 
+// SetPreviewInteractive sets the interactive flag on the preview pane
+func (w *TabbedWindow) SetPreviewInteractive(interactive bool) {
+	w.preview.SetInteractive(interactive)
+}
+
+// IsPreviewInteractive returns whether the preview pane is in interactive mode
+func (w *TabbedWindow) IsPreviewInteractive() bool {
+	return w.preview.IsInteractive()
+}
+
 func (w *TabbedWindow) String() string {
 	if w.width == 0 || w.height == 0 {
 		return ""
