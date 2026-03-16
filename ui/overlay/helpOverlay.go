@@ -34,7 +34,9 @@ const (
 	configIndexEffort      = 0
 	configIndexModel       = 1
 	configIndexPermissions = 2
-	configItemCount        = 3
+	configIndexSoundAlert  = 3
+	configIndexAlertSound  = 4
+	configItemCount        = 5
 )
 
 // HelpOverlay combines read-only help text with an editable Configs section.
@@ -43,9 +45,11 @@ type HelpOverlay struct {
 	effortPicker     *EffortPicker
 	modelPicker      *ModelPicker
 	permissionToggle *PermissionToggle
+	soundToggle      *SoundToggle
+	soundPicker      *SoundPicker
 	configMode       bool
-	configIndex      int // 0=effort, 1=model, 2=permissions
-	onSave           func(config.EffortLevel, config.ModelOption, bool)
+	configIndex      int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound
+	onSave           func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption)
 	width            int
 }
 
@@ -55,13 +59,17 @@ func NewHelpOverlay(
 	defaultEffort config.EffortLevel,
 	defaultModel config.ModelOption,
 	defaultSkipPerms bool,
-	onSave func(config.EffortLevel, config.ModelOption, bool),
+	defaultSoundAlert bool,
+	defaultAlertSound config.SoundOption,
+	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption),
 ) *HelpOverlay {
 	return &HelpOverlay{
 		helpContent:      helpContent,
 		effortPicker:     NewEffortPicker(defaultEffort),
 		modelPicker:      NewModelPicker(defaultModel),
 		permissionToggle: NewPermissionToggle(defaultSkipPerms),
+		soundToggle:      NewSoundToggle(defaultSoundAlert),
+		soundPicker:      NewSoundPicker(defaultAlertSound),
 		onSave:           onSave,
 	}
 }
@@ -79,6 +87,12 @@ func (h *HelpOverlay) SetWidth(width int) {
 	if h.permissionToggle != nil {
 		h.permissionToggle.SetWidth(innerWidth)
 	}
+	if h.soundToggle != nil {
+		h.soundToggle.SetWidth(innerWidth)
+	}
+	if h.soundPicker != nil {
+		h.soundPicker.SetWidth(innerWidth)
+	}
 }
 
 // focusCurrentConfig focuses the config item at configIndex.
@@ -90,6 +104,10 @@ func (h *HelpOverlay) focusCurrentConfig() {
 		h.modelPicker.Focus()
 	case configIndexPermissions:
 		h.permissionToggle.Focus()
+	case configIndexSoundAlert:
+		h.soundToggle.Focus()
+	case configIndexAlertSound:
+		h.soundPicker.Focus()
 	}
 }
 
@@ -102,6 +120,10 @@ func (h *HelpOverlay) blurCurrentConfig() {
 		h.modelPicker.Blur()
 	case configIndexPermissions:
 		h.permissionToggle.Blur()
+	case configIndexSoundAlert:
+		h.soundToggle.Blur()
+	case configIndexAlertSound:
+		h.soundPicker.Blur()
 	}
 }
 
@@ -117,11 +139,19 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 		case tea.KeyUp:
 			h.blurCurrentConfig()
 			h.configIndex = (h.configIndex - 1 + configItemCount) % configItemCount
+			// Skip sound picker if sound alert is off
+			if h.configIndex == configIndexAlertSound && !h.soundToggle.GetEnabled() {
+				h.configIndex = configIndexSoundAlert
+			}
 			h.focusCurrentConfig()
 			return false
 		case tea.KeyDown:
 			h.blurCurrentConfig()
 			h.configIndex = (h.configIndex + 1) % configItemCount
+			// Skip sound picker if sound alert is off
+			if h.configIndex == configIndexAlertSound && !h.soundToggle.GetEnabled() {
+				h.configIndex = (h.configIndex + 1) % configItemCount
+			}
 			h.focusCurrentConfig()
 			return false
 		case tea.KeyLeft, tea.KeyRight:
@@ -132,6 +162,10 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 				h.modelPicker.HandleKeyPress(msg)
 			case configIndexPermissions:
 				h.permissionToggle.HandleKeyPress(msg)
+			case configIndexSoundAlert:
+				h.soundToggle.HandleKeyPress(msg)
+			case configIndexAlertSound:
+				h.soundPicker.HandleKeyPress(msg)
 			}
 			return false
 		default:
@@ -153,6 +187,8 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			h.effortPicker.GetSelectedEffort(),
 			h.modelPicker.GetSelectedModel(),
 			h.permissionToggle.GetSkipPermissions(),
+			h.soundToggle.GetEnabled(),
+			h.soundPicker.GetSelectedSound(),
 		)
 	}
 	return true
@@ -201,6 +237,26 @@ func (h *HelpOverlay) Render() string {
 	}
 	b.WriteString(h.permissionToggle.Render())
 	b.WriteString("\n\n")
+
+	// Sound alert toggle
+	if h.configMode && h.configIndex == configIndexSoundAlert {
+		b.WriteString(hoActiveIndicator.Render("> "))
+	} else if h.configMode {
+		b.WriteString("  ")
+	}
+	b.WriteString(h.soundToggle.Render())
+	b.WriteString("\n\n")
+
+	// Alert sound picker (only visible when sound alert is enabled)
+	if h.soundToggle.GetEnabled() {
+		if h.configMode && h.configIndex == configIndexAlertSound {
+			b.WriteString(hoActiveIndicator.Render("> "))
+		} else if h.configMode {
+			b.WriteString("  ")
+		}
+		b.WriteString(h.soundPicker.Render())
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString(divider)
 	b.WriteString("\n\n")

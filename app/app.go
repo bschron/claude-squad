@@ -6,6 +6,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"claude-squad/sound"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -312,6 +313,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case tickUpdateMetadataMessage:
+		shouldPlaySound := false
 		for _, instance := range m.list.GetInstances() {
 			if !instance.Started() || instance.Paused() {
 				continue
@@ -324,12 +326,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if prompt {
 					instance.TapEnter()
 				} else {
+					if instance.Status == session.Running {
+						shouldPlaySound = true
+					}
 					instance.SetStatus(session.Ready)
 				}
 			}
 			if err := instance.UpdateDiffStats(); err != nil {
 				log.WarningLog.Printf("could not update diff stats: %v", err)
 			}
+		}
+		if shouldPlaySound && m.projectConfig.GetSoundAlert() {
+			sound.Play(m.projectConfig.GetAlertSound())
 		}
 		return m, tickUpdateMetadataCmd
 	case tea.MouseMsg:

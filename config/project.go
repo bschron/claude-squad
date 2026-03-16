@@ -55,11 +55,61 @@ func ModelOptionFromDisplay(label string) ModelOption {
 	return ModelDefault
 }
 
+// SoundOption represents a system sound for alerts.
+type SoundOption string
+
+const (
+	SoundBasso     SoundOption = "Basso"
+	SoundBlow      SoundOption = "Blow"
+	SoundBottle    SoundOption = "Bottle"
+	SoundFrog      SoundOption = "Frog"
+	SoundFunk      SoundOption = "Funk"
+	SoundGlass     SoundOption = "Glass"
+	SoundHero      SoundOption = "Hero"
+	SoundMorse     SoundOption = "Morse"
+	SoundPing      SoundOption = "Ping"
+	SoundPop       SoundOption = "Pop"
+	SoundPurr      SoundOption = "Purr"
+	SoundSosumi    SoundOption = "Sosumi"
+	SoundSubmarine SoundOption = "Submarine"
+	SoundTink      SoundOption = "Tink"
+)
+
+// ValidSoundOptions is the ordered list of valid sound options.
+var ValidSoundOptions = []SoundOption{
+	SoundBasso, SoundBlow, SoundBottle, SoundFrog, SoundFunk,
+	SoundGlass, SoundHero, SoundMorse, SoundPing, SoundPop,
+	SoundPurr, SoundSosumi, SoundSubmarine, SoundTink,
+}
+
+// DefaultSound is the default alert sound.
+var DefaultSound = SoundPop
+
+// SoundDisplayLabels maps sound options to their display labels.
+var SoundDisplayLabels = map[SoundOption]string{
+	SoundBasso:     "basso",
+	SoundBlow:      "blow",
+	SoundBottle:    "bottle",
+	SoundFrog:      "frog",
+	SoundFunk:      "funk",
+	SoundGlass:     "glass",
+	SoundHero:      "hero",
+	SoundMorse:     "morse",
+	SoundPing:      "ping",
+	SoundPop:       "pop",
+	SoundPurr:      "purr",
+	SoundSosumi:    "sosumi",
+	SoundSubmarine: "submarine",
+	SoundTink:      "tink",
+}
+
 // ProjectConfig represents per-project configuration stored at the git repo root.
 type ProjectConfig struct {
 	DefaultEffort   EffortLevel `json:"default_effort,omitempty"`
 	DefaultModel    ModelOption `json:"default_model,omitempty"`
 	SkipPermissions *bool       `json:"skip_permissions,omitempty"`
+	SoundAlert      *bool       `json:"sound_alert,omitempty"`
+	AlertSound      SoundOption `json:"alert_sound,omitempty"`
 }
 
 // GetSkipPermissions returns the effective skip permissions value (nil defaults to true).
@@ -73,6 +123,27 @@ func (c *ProjectConfig) GetSkipPermissions() bool {
 // SetSkipPermissions sets the skip permissions value.
 func (c *ProjectConfig) SetSkipPermissions(v bool) {
 	c.SkipPermissions = &v
+}
+
+// GetSoundAlert returns the effective sound alert value (nil defaults to false).
+func (c *ProjectConfig) GetSoundAlert() bool {
+	if c.SoundAlert == nil {
+		return false
+	}
+	return *c.SoundAlert
+}
+
+// SetSoundAlert sets the sound alert value.
+func (c *ProjectConfig) SetSoundAlert(v bool) {
+	c.SoundAlert = &v
+}
+
+// GetAlertSound returns the effective alert sound (empty defaults to DefaultSound).
+func (c *ProjectConfig) GetAlertSound() SoundOption {
+	if c.AlertSound == "" {
+		return DefaultSound
+	}
+	return c.AlertSound
 }
 
 // LoadProjectConfig reads {gitRoot}/.claude-squad.json, returning defaults if missing.
@@ -101,6 +172,11 @@ func LoadProjectConfig(gitRoot string) *ProjectConfig {
 		cfg.DefaultModel = ModelDefault
 	}
 
+	// Validate the loaded alert sound
+	if cfg.AlertSound != "" && !isValidSound(cfg.AlertSound) {
+		cfg.AlertSound = ""
+	}
+
 	return cfg
 }
 
@@ -126,6 +202,15 @@ func isValidEffort(e EffortLevel) bool {
 func isValidModel(m ModelOption) bool {
 	for _, v := range ValidModelOptions {
 		if v == m {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidSound(s SoundOption) bool {
+	for _, v := range ValidSoundOptions {
+		if v == s {
 			return true
 		}
 	}
