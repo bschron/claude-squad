@@ -49,12 +49,20 @@ type optionPosition struct {
 	key    keys.KeyName
 }
 
+// menuGroup defines a contiguous range of menu options.
+type menuGroup struct {
+	start, end int
+}
+
 type Menu struct {
 	options       []keys.KeyName
+	groups        []menuGroup // dynamic group boundaries for separators
+	actionGroupIdx int       // which group index is the action group (-1 for none)
 	height, width int
 	state         MenuState
 	instance      *session.Instance
 	activeTab     int
+	kanbanVisible bool
 
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
@@ -69,11 +77,19 @@ var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
 
 func NewMenu() *Menu {
 	return &Menu{
-		options:   defaultMenuOptions,
-		state:     StateEmpty,
-		activeTab: 0,
-		keyDown:   -1,
+		options:        defaultMenuOptions,
+		groups:         nil,
+		actionGroupIdx: -1,
+		state:          StateEmpty,
+		activeTab:      0,
+		keyDown:        -1,
 	}
+}
+
+// SetKanbanVisible updates kanban visibility and refreshes menu options.
+func (m *Menu) SetKanbanVisible(visible bool) {
+	m.kanbanVisible = visible
+	m.updateOptions()
 }
 
 func (m *Menu) Keydown(name keys.KeyName) {
@@ -134,11 +150,13 @@ func (m *Menu) addInstanceOptions() {
 	// Loading instances only get minimal options
 	if m.instance != nil && m.instance.Status == session.Loading {
 		m.options = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
+		m.groups = nil
+		m.actionGroupIdx = -1
 		return
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	instanceGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
@@ -153,14 +171,40 @@ func (m *Menu) addInstanceOptions() {
 		actionGroup = append(actionGroup, keys.KeyShiftUp)
 	}
 
+	// Kanban navigation group (when kanban is visible)
+	var kanbanGroup []keys.KeyName
+	if m.kanbanVisible {
+		kanbanGroup = []keys.KeyName{keys.KeyLeft, keys.KeyRight, keys.KeyYank}
+	}
+
 	// System group
 	systemGroup := []keys.KeyName{keys.KeyKanban, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
-	// Combine all groups
+	// Build options and compute group boundaries
+	options := make([]keys.KeyName, 0, len(instanceGroup)+len(actionGroup)+len(kanbanGroup)+len(systemGroup))
+	var groups []menuGroup
+
+	g1Start := len(options)
+	options = append(options, instanceGroup...)
+	groups = append(groups, menuGroup{g1Start, len(options)})
+
+	g2Start := len(options)
 	options = append(options, actionGroup...)
+	groups = append(groups, menuGroup{g2Start, len(options)})
+	m.actionGroupIdx = 1
+
+	if len(kanbanGroup) > 0 {
+		g3Start := len(options)
+		options = append(options, kanbanGroup...)
+		groups = append(groups, menuGroup{g3Start, len(options)})
+	}
+
+	g4Start := len(options)
 	options = append(options, systemGroup...)
+	groups = append(groups, menuGroup{g4Start, len(options)})
 
 	m.options = options
+	m.groups = groups
 }
 
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
@@ -171,16 +215,6 @@ func (m *Menu) SetSize(width, height int) {
 
 func (m *Menu) String() string {
 	var s strings.Builder
-
-	// Define group boundaries
-	groups := []struct {
-		start int
-		end   int
-	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
-	}
 
 	// Track option positions for click detection.
 	m.optionPositions = nil
@@ -203,11 +237,12 @@ func (m *Menu) String() string {
 		var inActionGroup bool
 		switch m.state {
 		case StateEmpty:
-			// For empty state, the action group is the first group
 			inActionGroup = i <= 1
 		default:
-			// For other states, the action group is the second group
-			inActionGroup = i >= groups[1].start && i < groups[1].end
+			if m.actionGroupIdx >= 0 && m.actionGroupIdx < len(m.groups) {
+				ag := m.groups[m.actionGroupIdx]
+				inActionGroup = i >= ag.start && i < ag.end
+			}
 		}
 
 		startPos := cursor
@@ -235,7 +270,7 @@ func (m *Menu) String() string {
 		// Add appropriate separator
 		if i != len(m.options)-1 {
 			isGroupEnd := false
-			for _, group := range groups {
+			for _, group := range m.groups {
 				if i == group.end-1 {
 					s.WriteString(sepStyle.Render(verticalSeparator))
 					cursor += len(verticalSeparator)

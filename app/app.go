@@ -212,6 +212,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 				m.list.SelectInstance(inst)
 			}
 			m.kanbanVisible = false
+			m.menu.SetKanbanVisible(false)
 		}
 	}
 
@@ -901,6 +902,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, attachCmd
 	case keys.KeyKanban:
 		m.kanbanVisible = !m.kanbanVisible
+		m.menu.SetKanbanVisible(m.kanbanVisible)
 		if m.kanbanVisible {
 			// Initialize kanban cursor from current list selection
 			if inst := m.list.GetSelectedInstance(); inst != nil {
