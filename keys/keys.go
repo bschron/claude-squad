@@ -118,7 +118,7 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	),
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
-		key.WithHelp("r", "resume"),
+		key.WithHelp("r", "resume/revive"),
 	),
 
 	KeyKanban: key.NewBinding(

@@ -50,7 +50,7 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Handoff:"),
 		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
 		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
-		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
+		keyStyle.Render("r")+descStyle.Render("         - Resume paused session / Revive dead session"),
 		"",
 		headerStyle.Render("Kanban (K to toggle):"),
 		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate cards within a column"),

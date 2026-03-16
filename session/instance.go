@@ -493,6 +493,9 @@ func (i *Instance) Paused() bool {
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
+	if i.tmuxSession == nil {
+		return false
+	}
 	return i.tmuxSession.DoesSessionExist()
 }
 
@@ -612,6 +615,35 @@ func (i *Instance) Resume() error {
 			}
 			return fmt.Errorf("failed to start new session: %w", err)
 		}
+	}
+
+	i.SetStatus(Running)
+	return nil
+}
+
+// Revive recreates a dead tmux session for an instance whose worktree still exists.
+// This handles the case where tmux sessions are killed (e.g. after a reboot) but the
+// worktree and branch are still intact.
+func (i *Instance) Revive() error {
+	if !i.started {
+		return fmt.Errorf("cannot revive instance that has not been started")
+	}
+	if i.Status == Paused {
+		return fmt.Errorf("use Resume() for paused instances")
+	}
+	if i.tmuxSession.DoesSessionExist() {
+		return fmt.Errorf("tmux session is still alive, no need to revive")
+	}
+
+	// Build program with --continue flag for Claude so it picks up the previous conversation
+	startProgram := i.Program
+	if isClaudeProgram(i.Program) {
+		startProgram = i.Program + " --continue --dangerously-skip-permissions"
+	}
+
+	// Create new tmux session in the existing worktree directory
+	if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath(), startProgram); err != nil {
+		return fmt.Errorf("failed to revive session: %w", err)
 	}
 
 	i.SetStatus(Running)

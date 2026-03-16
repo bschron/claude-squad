@@ -845,8 +845,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected.IsExternal() {
 			return m, m.handleError(fmt.Errorf("cannot resume external session '%s' (managed by Claude Code)", selected.Title))
 		}
-		if err := selected.Resume(); err != nil {
-			return m, m.handleError(err)
+		if selected.Paused() {
+			if err := selected.Resume(); err != nil {
+				return m, m.handleError(err)
+			}
+		} else if !selected.TmuxAlive() {
+			if err := selected.Revive(); err != nil {
+				return m, m.handleError(err)
+			}
 		}
 		return m, tea.WindowSize()
 	case keys.KeyYank:
