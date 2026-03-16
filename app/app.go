@@ -823,17 +823,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// When kanban is visible, copy tmux session name to clipboard
-		if m.kanbanVisible {
-			tmuxName := selected.GetTmuxSessionName()
-			if tmuxName == "" {
-				return m, m.handleError(fmt.Errorf("no tmux session name for '%s'", selected.Title))
-			}
-			if err := copyToClipboard(tmuxName); err != nil {
-				return m, m.handleError(fmt.Errorf("failed to copy to clipboard: %w", err))
-			}
-			return m, m.handleError(fmt.Errorf("Copied tmux session name: %s", tmuxName))
-		}
-
 		if selected.IsExternal() {
 			return m, m.handleError(fmt.Errorf("cannot checkout external session '%s' (managed by Claude Code)", selected.Title))
 		}
@@ -859,6 +848,22 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		return m, tea.WindowSize()
+	case keys.KeyYank:
+		if !m.kanbanVisible {
+			return m, nil
+		}
+		selected := m.getActiveInstance()
+		if selected == nil {
+			return m, nil
+		}
+		tmuxName := selected.GetTmuxSessionName()
+		if tmuxName == "" {
+			return m, m.handleError(fmt.Errorf("no tmux session name for '%s'", selected.Title))
+		}
+		if err := copyToClipboard(tmuxName); err != nil {
+			return m, m.handleError(fmt.Errorf("failed to copy to clipboard: %w", err))
+		}
+		return m, m.handleError(fmt.Errorf("Copied tmux session name: %s", tmuxName))
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil

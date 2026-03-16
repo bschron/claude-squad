@@ -32,6 +32,7 @@ const (
 	KeyKanban // Key for toggling kanban board view
 	KeyLeft   // Key for moving left in kanban
 	KeyRight  // Key for moving right in kanban
+	KeyYank   // Key for copying tmux session name in kanban
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -58,6 +59,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"h":          KeyLeft,
 	"right":      KeyRight,
 	"l":          KeyRight,
+	"y":          KeyYank,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -130,6 +132,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyRight: key.NewBinding(
 		key.WithKeys("right", "l"),
 		key.WithHelp("→/l", "right"),
+	),
+	KeyYank: key.NewBinding(
+		key.WithKeys("y"),
+		key.WithHelp("y", "copy tmux name"),
 	),
 
 	// -- Special keybindings --
