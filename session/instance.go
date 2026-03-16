@@ -683,6 +683,14 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 	i.tmuxSession = session
 }
 
+// GetTmuxSessionName returns the tmux session name for this instance.
+func (i *Instance) GetTmuxSessionName() string {
+	if i.tmuxSession == nil {
+		return ""
+	}
+	return i.tmuxSession.GetSessionName()
+}
+
 // SendKeys sends keys to the tmux session
 func (i *Instance) SendKeys(keys string) error {
 	if !i.started || i.Status == Paused {

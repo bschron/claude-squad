@@ -81,7 +81,7 @@ func TestKanbanBoard_SelectedCardHighlight(t *testing.T) {
 	// In non-TTY environments (like tests), lipgloss adaptive colors may resolve
 	// identically, so we verify the board renders without errors and card bounds
 	// are populated by checking HandleClick on a point inside the first card.
-	gotInst, _ := kb1.HandleClick(5, 3)
+	gotInst := kb1.HandleClick(5, 3)
 	if gotInst != nil {
 		assert.Equal(t, inst1, gotInst, "first card should be inst1")
 	}
@@ -218,14 +218,12 @@ func TestKanbanBoard_HandleClick_OutsideBounds(t *testing.T) {
 	_ = kb.String()
 
 	// Click far outside any card.
-	gotInst, gotAction := kb.HandleClick(9999, 9999)
+	gotInst := kb.HandleClick(9999, 9999)
 	assert.Nil(t, gotInst, "click outside bounds should return nil instance")
-	assert.Empty(t, gotAction, "click outside bounds should return empty action")
 
 	// Click at negative coordinates.
-	gotInst, gotAction = kb.HandleClick(-1, -1)
+	gotInst = kb.HandleClick(-1, -1)
 	assert.Nil(t, gotInst)
-	assert.Empty(t, gotAction)
 }
 
 func TestKanbanBoard_HandleClick_OnCard(t *testing.T) {
@@ -238,11 +236,9 @@ func TestKanbanBoard_HandleClick_OnCard(t *testing.T) {
 	// The card should be in the Running column (column 0). The card body bound
 	// starts at approximately (1, 2) with some width/height. We try a point that
 	// should land inside the card body.
-	gotInst, gotAction := kb.HandleClick(5, 3)
+	gotInst := kb.HandleClick(5, 3)
 	if gotInst != nil {
 		assert.Equal(t, inst, gotInst, "click on card area should return the instance")
-		// Body click returns empty action.
-		assert.Empty(t, gotAction)
 	}
 	// If the exact coordinates miss (due to rendering specifics), that's acceptable;
 	// the main invariant is that out-of-bounds clicks return nil (tested above).
@@ -273,34 +269,39 @@ func TestKanbanBoard_ColumnAtX_ZeroWidth(t *testing.T) {
 	assert.Equal(t, 0, kb.ColumnAtX(50))
 }
 
-func TestKanbanBoard_ButtonDefs_Running(t *testing.T) {
+func TestKanbanBoard_NoButtons_Running(t *testing.T) {
 	inst := makeTestInstance("btn-run", session.Running, "b")
 	kb := makeKanbanWithInstances(150, 30, []*session.Instance{inst}, nil)
 
 	output := kb.String()
-	assert.Contains(t, output, "SEND")
-	assert.Contains(t, output, "OPEN")
-	assert.Contains(t, output, "STOP")
+	// Cards should not contain button labels (buttons were removed)
+	assert.NotContains(t, output, "SEND")
+	assert.NotContains(t, output, "OPEN")
+	assert.NotContains(t, output, "STOP")
+	// Card content should still be present
+	assert.Contains(t, output, "btn-run")
 }
 
-func TestKanbanBoard_ButtonDefs_Ready(t *testing.T) {
+func TestKanbanBoard_NoButtons_Ready(t *testing.T) {
 	inst := makeTestInstance("btn-ready", session.Ready, "b")
 	kb := makeKanbanWithInstances(150, 30, []*session.Instance{inst}, nil)
 
 	output := kb.String()
-	assert.Contains(t, output, "SEND")
-	assert.Contains(t, output, "OPEN")
-	assert.Contains(t, output, "STOP")
-	assert.Contains(t, output, "WAITING")
+	assert.NotContains(t, output, "SEND")
+	assert.NotContains(t, output, "OPEN")
+	assert.NotContains(t, output, "STOP")
+	assert.NotContains(t, output, "WAITING")
+	assert.Contains(t, output, "btn-ready")
 }
 
-func TestKanbanBoard_ButtonDefs_Paused(t *testing.T) {
+func TestKanbanBoard_NoButtons_Paused(t *testing.T) {
 	inst := makeTestInstance("btn-paused", session.Paused, "b")
 	kb := makeKanbanWithInstances(150, 30, []*session.Instance{inst}, nil)
 
 	output := kb.String()
-	assert.Contains(t, output, "RESUME")
-	assert.Contains(t, output, "DELETE")
+	assert.NotContains(t, output, "RESUME")
+	assert.NotContains(t, output, "DELETE")
+	assert.Contains(t, output, "btn-paused")
 }
 
 func TestKanbanBoard_ZeroSize_RendersEmpty(t *testing.T) {

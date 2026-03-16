@@ -20,19 +20,6 @@ var (
 	cardTimeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
 
-	cardBtnStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"}).
-			Background(lipgloss.AdaptiveColor{Light: "#dde4f0", Dark: "#3C3C3C"}).
-			Padding(0, 1)
-
-	cardBtnActiveStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("62")).
-				Padding(0, 1)
-
-	cardWaitingBadge = lipgloss.NewStyle().
-				Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"}).
-				Bold(true)
 )
 
 // renderCard renders a single kanban card for the given instance.
@@ -124,33 +111,9 @@ func renderCard(inst *session.Instance, selected bool, width int, sp *spinner.Mo
 	elapsed := time.Since(inst.CreatedAt)
 	timeLine := cardTimeStyle.Render(fmt.Sprintf("%s %s", "\u23f1", formatDuration(elapsed)))
 
-	// -- Line 4: Action buttons --
-	buttonLine := renderButtons(inst, selected)
-
-	lines := []string{titleLine, branchLine, timeLine, buttonLine}
+	lines := []string{titleLine, branchLine, timeLine}
 
 	return cardStyle.Render(strings.Join(lines, "\n"))
-}
-
-// renderButtons returns the action button row for a card.
-func renderButtons(inst *session.Instance, selected bool) string {
-	btnStyle := cardBtnStyle
-	if selected {
-		btnStyle = cardBtnActiveStyle
-	}
-
-	var parts []string
-	switch inst.Status {
-	case session.Running, session.Loading:
-		parts = append(parts, btnStyle.Render("SEND"), btnStyle.Render("OPEN"), btnStyle.Render("STOP"))
-	case session.Ready:
-		parts = append(parts, btnStyle.Render("SEND"), btnStyle.Render("OPEN"), btnStyle.Render("STOP"))
-		parts = append(parts, cardWaitingBadge.Render("WAITING"))
-	case session.Paused:
-		parts = append(parts, btnStyle.Render("RESUME"), btnStyle.Render("DELETE"))
-	}
-
-	return strings.Join(parts, " ")
 }
 
 // formatDuration returns a human-readable short duration string.

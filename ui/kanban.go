@@ -13,7 +13,6 @@ import (
 type cardBound struct {
 	rect     Rect
 	instance *session.Instance
-	action   string // empty for card body, "send"/"open"/"stop"/"resume"/"delete" for buttons
 }
 
 // KanbanBoard renders instances organized into status columns.
@@ -24,6 +23,8 @@ type KanbanBoard struct {
 	selectedInst  *session.Instance
 	spinner       *spinner.Model
 	cardBounds    []cardBound
+	cursorCol     int // 0-2: which column
+	cursorIdx     int // index within column
 }
 
 // NewKanbanBoard creates a new kanban board panel.
@@ -40,11 +41,16 @@ func (kb *KanbanBoard) SetSize(width, height int) {
 }
 
 // UpdateInstances classifies instances into columns based on their status and
-// updates the selected instance highlight.
+// updates the selected instance highlight based on the cursor position.
 func (kb *KanbanBoard) UpdateInstances(instances []*session.Instance, selected *session.Instance) {
+	// Save the instance at the current cursor position before reclassifying
+	var cursorInst *session.Instance
+	if kb.cursorCol >= 0 && kb.cursorCol < 3 && kb.cursorIdx >= 0 && kb.cursorIdx < len(kb.columns[kb.cursorCol]) {
+		cursorInst = kb.columns[kb.cursorCol][kb.cursorIdx]
+	}
+
 	// Clear columns
 	kb.columns = [3][]*session.Instance{}
-	kb.selectedInst = selected
 
 	for _, inst := range instances {
 		switch inst.Status {
@@ -57,22 +63,44 @@ func (kb *KanbanBoard) UpdateInstances(instances []*session.Instance, selected *
 		}
 	}
 
-	// Clamp scroll offsets and auto-scroll to keep selected visible
+	// Restore cursor position: find the same instance after reclassification
+	if cursorInst != nil {
+		found := false
+		for col := 0; col < 3; col++ {
+			for idx, inst := range kb.columns[col] {
+				if inst == cursorInst {
+					kb.cursorCol = col
+					kb.cursorIdx = idx
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			kb.clampCursor()
+		}
+	} else {
+		kb.clampCursor()
+	}
+
+	// Set selectedInst from cursor position
+	if kb.cursorCol >= 0 && kb.cursorCol < 3 && kb.cursorIdx >= 0 && kb.cursorIdx < len(kb.columns[kb.cursorCol]) {
+		kb.selectedInst = kb.columns[kb.cursorCol][kb.cursorIdx]
+	} else {
+		kb.selectedInst = selected
+	}
+
+	// Clamp scroll offsets and auto-scroll to keep cursor visible
 	for i := 0; i < 3; i++ {
 		if kb.scrollOffset[i] >= len(kb.columns[i]) {
 			kb.scrollOffset[i] = 0
 		}
-		// If the selected instance is in this column, make sure it's visible
-		if selected != nil {
-			for idx, inst := range kb.columns[i] {
-				if inst == selected {
-					if idx < kb.scrollOffset[i] {
-						kb.scrollOffset[i] = idx
-					}
-					// We can't know exactly how many cards fit without rendering,
-					// but scrolling to the selected index is a safe bet.
-					break
-				}
+		if i == kb.cursorCol && kb.selectedInst != nil {
+			if kb.cursorIdx < kb.scrollOffset[i] {
+				kb.scrollOffset[i] = kb.cursorIdx
 			}
 		}
 	}
@@ -147,33 +175,9 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 		colX := colIdx * (kb.width / 3)
 		cardY := 2 + usedHeight // 1 header line + 1 spacing line
 
-		// The last line of the card interior is the button row.
-		// Card has 1 border top + 4 content lines + 1 border bottom = 6 lines.
-		// Button row is at cardY + cardH - 2 (1 border bottom + 0-indexed).
-		buttonY := cardY + cardH - 2
-		if buttonY < cardY {
-			buttonY = cardY
-		}
-
-		// Register button bounds based on instance status.
-		// Buttons are laid out inside the card: border(1) + padding(1) = offset 2
-		btnX := colX + 3 // border + padding
-		buttonDefs := cardButtonDefs(inst)
-		for _, bd := range buttonDefs {
-			btnW := len(bd.label) + 2 // padding(0,1) adds 2 chars
-			kb.cardBounds = append(kb.cardBounds, cardBound{
-				rect:     Rect{X: btnX, Y: buttonY, Width: btnW, Height: 1},
-				instance: inst,
-				action:   bd.action,
-			})
-			btnX += btnW + 1 // +1 for space separator
-		}
-
-		// Register the card body bound (covers the whole card for general selection)
 		kb.cardBounds = append(kb.cardBounds, cardBound{
 			rect:     Rect{X: colX + 1, Y: cardY, Width: cardWidth, Height: cardH},
 			instance: inst,
-			action:   "",
 		})
 
 		cardLines = append(cardLines, card)
@@ -191,45 +195,15 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 	return lipgloss.Place(width, kb.height, lipgloss.Left, lipgloss.Top, column)
 }
 
-// buttonDef describes a button label and its action identifier.
-type buttonDef struct {
-	label  string
-	action string
-}
-
-// cardButtonDefs returns the button definitions for a given instance status.
-func cardButtonDefs(inst *session.Instance) []buttonDef {
-	switch inst.Status {
-	case session.Running, session.Loading:
-		return []buttonDef{
-			{label: "SEND", action: "send"},
-			{label: "OPEN", action: "open"},
-			{label: "STOP", action: "stop"},
-		}
-	case session.Ready:
-		return []buttonDef{
-			{label: "SEND", action: "send"},
-			{label: "OPEN", action: "open"},
-			{label: "STOP", action: "stop"},
-		}
-	case session.Paused:
-		return []buttonDef{
-			{label: "RESUME", action: "resume"},
-			{label: "DELETE", action: "delete"},
+// HandleClick tests the given local coordinates against recorded card bounds
+// and returns the matching instance (if any).
+func (kb *KanbanBoard) HandleClick(localX, localY int) *session.Instance {
+	for _, cb := range kb.cardBounds {
+		if cb.rect.Contains(localX, localY) {
+			return cb.instance
 		}
 	}
 	return nil
-}
-
-// HandleClick tests the given local coordinates against recorded card bounds
-// and returns the matching instance and action (if any).
-func (kb *KanbanBoard) HandleClick(localX, localY int) (*session.Instance, string) {
-	for _, cb := range kb.cardBounds {
-		if cb.rect.Contains(localX, localY) {
-			return cb.instance, cb.action
-		}
-	}
-	return nil, ""
 }
 
 // ScrollColumn scrolls the given column index by delta lines.
@@ -261,4 +235,120 @@ func (kb *KanbanBoard) ColumnAtX(localX int) int {
 		col = 2
 	}
 	return col
+}
+
+// clampCursor ensures cursorCol and cursorIdx are within valid bounds.
+func (kb *KanbanBoard) clampCursor() {
+	// Find a non-empty column starting from cursorCol
+	if kb.cursorCol < 0 {
+		kb.cursorCol = 0
+	}
+	if kb.cursorCol > 2 {
+		kb.cursorCol = 2
+	}
+	colLen := len(kb.columns[kb.cursorCol])
+	if colLen == 0 {
+		// Try to find any non-empty column
+		for i := 0; i < 3; i++ {
+			if len(kb.columns[i]) > 0 {
+				kb.cursorCol = i
+				colLen = len(kb.columns[i])
+				break
+			}
+		}
+	}
+	if kb.cursorIdx < 0 {
+		kb.cursorIdx = 0
+	}
+	if colLen > 0 && kb.cursorIdx >= colLen {
+		kb.cursorIdx = colLen - 1
+	}
+}
+
+// CursorUp moves the cursor up within the current column.
+func (kb *KanbanBoard) CursorUp() {
+	if kb.cursorIdx > 0 {
+		kb.cursorIdx--
+	}
+	// Adjust scroll offset to keep cursor visible
+	if kb.cursorIdx < kb.scrollOffset[kb.cursorCol] {
+		kb.scrollOffset[kb.cursorCol] = kb.cursorIdx
+	}
+	kb.syncSelectedFromCursor()
+}
+
+// CursorDown moves the cursor down within the current column.
+func (kb *KanbanBoard) CursorDown() {
+	colLen := len(kb.columns[kb.cursorCol])
+	if kb.cursorIdx < colLen-1 {
+		kb.cursorIdx++
+	}
+	kb.syncSelectedFromCursor()
+}
+
+// CursorLeft moves the cursor to the left column, skipping empty columns.
+func (kb *KanbanBoard) CursorLeft() {
+	for col := kb.cursorCol - 1; col >= 0; col-- {
+		if len(kb.columns[col]) > 0 {
+			kb.cursorCol = col
+			if kb.cursorIdx >= len(kb.columns[col]) {
+				kb.cursorIdx = len(kb.columns[col]) - 1
+			}
+			kb.syncSelectedFromCursor()
+			return
+		}
+	}
+}
+
+// CursorRight moves the cursor to the right column, skipping empty columns.
+func (kb *KanbanBoard) CursorRight() {
+	for col := kb.cursorCol + 1; col <= 2; col++ {
+		if len(kb.columns[col]) > 0 {
+			kb.cursorCol = col
+			if kb.cursorIdx >= len(kb.columns[col]) {
+				kb.cursorIdx = len(kb.columns[col]) - 1
+			}
+			kb.syncSelectedFromCursor()
+			return
+		}
+	}
+}
+
+// syncSelectedFromCursor updates selectedInst to match the current cursor position.
+func (kb *KanbanBoard) syncSelectedFromCursor() {
+	if kb.cursorCol >= 0 && kb.cursorCol < 3 {
+		col := kb.columns[kb.cursorCol]
+		if kb.cursorIdx >= 0 && kb.cursorIdx < len(col) {
+			kb.selectedInst = col[kb.cursorIdx]
+		}
+	}
+}
+
+// GetCursorInstance returns the instance at the current cursor position, or nil.
+func (kb *KanbanBoard) GetCursorInstance() *session.Instance {
+	if kb.cursorCol < 0 || kb.cursorCol > 2 {
+		return nil
+	}
+	col := kb.columns[kb.cursorCol]
+	if kb.cursorIdx < 0 || kb.cursorIdx >= len(col) {
+		return nil
+	}
+	return col[kb.cursorIdx]
+}
+
+// SetCursorToInstance finds the given instance across columns and sets the cursor to it.
+func (kb *KanbanBoard) SetCursorToInstance(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	for col := 0; col < 3; col++ {
+		for idx, candidate := range kb.columns[col] {
+			if candidate == inst {
+				kb.cursorCol = col
+				kb.cursorIdx = idx
+				kb.selectedInst = inst
+				return
+			}
+		}
+	}
 }

@@ -117,6 +117,14 @@ func NewExternalTmuxSession(sessionName string) *TmuxSession {
 	}
 }
 
+// GetSessionName returns the sanitized tmux session name.
+func (t *TmuxSession) GetSessionName() string {
+	if t == nil {
+		return ""
+	}
+	return t.sanitizedName
+}
+
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 // An optional programOverride can be provided to use a different command than the session's default program.

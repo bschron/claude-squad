@@ -30,6 +30,8 @@ const (
 	KeyShiftDown
 
 	KeyKanban // Key for toggling kanban board view
+	KeyLeft   // Key for moving left in kanban
+	KeyRight  // Key for moving right in kanban
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -52,6 +54,10 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 	"K":          KeyKanban,
+	"left":       KeyLeft,
+	"h":          KeyLeft,
+	"right":      KeyRight,
+	"l":          KeyRight,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -116,6 +122,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyKanban: key.NewBinding(
 		key.WithKeys("K"),
 		key.WithHelp("K", "kanban"),
+	),
+	KeyLeft: key.NewBinding(
+		key.WithKeys("left", "h"),
+		key.WithHelp("←/h", "left"),
+	),
+	KeyRight: key.NewBinding(
+		key.WithKeys("right", "l"),
+		key.WithHelp("→/l", "right"),
 	),
 
 	// -- Special keybindings --

@@ -11,6 +11,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -203,7 +206,13 @@ func (m *home) hasInstanceWithTitle(title string) bool {
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	// Auto-hide kanban when terminal is too narrow
 	if msg.Width < 80 {
-		m.kanbanVisible = false
+		if m.kanbanVisible {
+			// Sync list selection from kanban cursor before hiding
+			if inst := m.kanban.GetCursorInstance(); inst != nil {
+				m.list.SelectInstance(inst)
+			}
+			m.kanbanVisible = false
+		}
 	}
 
 	// Menu takes 10% of height, list and window take 90%
@@ -214,10 +223,10 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	var listWidth, tabsWidth, kanbanWidth int
 
 	if m.kanbanVisible {
-		// 3-panel layout: 20% list, 45% preview, 35% kanban
-		listWidth = int(float32(msg.Width) * 0.2)
-		kanbanWidth = int(float32(msg.Width) * 0.35)
-		tabsWidth = msg.Width - listWidth - kanbanWidth
+		// 2-panel layout: kanban replaces list, kanban + preview
+		listWidth = 0
+		kanbanWidth = int(float32(msg.Width) * 0.4)
+		tabsWidth = msg.Width - kanbanWidth
 	} else {
 		// 2-panel layout: 30% list, 70% preview
 		listWidth = int(float32(msg.Width) * 0.3)
@@ -230,12 +239,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.kanban.SetSize(kanbanWidth, contentHeight)
 
 	// Populate layout bounds for mouse hit testing.
-	// Content starts at Y=0; the list is left-most, then preview, then kanban.
-	m.bounds.list = ui.Rect{X: 0, Y: 0, Width: listWidth, Height: contentHeight}
-	m.bounds.preview = ui.Rect{X: listWidth, Y: 0, Width: tabsWidth, Height: contentHeight}
 	if m.kanbanVisible {
-		m.bounds.kanban = ui.Rect{X: listWidth + tabsWidth, Y: 0, Width: kanbanWidth, Height: contentHeight}
+		// Kanban at left, preview at right
+		m.bounds.list = ui.Rect{}
+		m.bounds.kanban = ui.Rect{X: 0, Y: 0, Width: kanbanWidth, Height: contentHeight}
+		m.bounds.preview = ui.Rect{X: kanbanWidth, Y: 0, Width: tabsWidth, Height: contentHeight}
 	} else {
+		// List at left, preview at right
+		m.bounds.list = ui.Rect{X: 0, Y: 0, Width: listWidth, Height: contentHeight}
+		m.bounds.preview = ui.Rect{X: listWidth, Y: 0, Width: tabsWidth, Height: contentHeight}
 		m.bounds.kanban = ui.Rect{}
 	}
 	m.bounds.menu = ui.Rect{X: 0, Y: contentHeight, Width: msg.Width, Height: menuHeight + 1}
@@ -413,7 +425,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		return nil, false
 	}
 
-	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && name == keys.KeyEnter {
+	if active := m.getActiveInstance(); active != nil && active.Paused() && name == keys.KeyEnter {
 		return nil, false
 	}
 	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
@@ -628,8 +640,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	if msg.Type == tea.KeyEsc {
 		// If in preview tab and in scroll mode, exit scroll mode
 		if m.tabbedWindow.IsInPreviewTab() && m.tabbedWindow.IsPreviewInScrollMode() {
-			// Use the selected instance from the list
-			selected := m.list.GetSelectedInstance()
+			selected := m.getActiveInstance()
 			err := m.tabbedWindow.ResetPreviewToNormalMode(selected)
 			if err != nil {
 				return m, m.handleError(err)
@@ -706,11 +717,31 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, nil
 	case keys.KeyUp:
-		m.list.Up()
+		if m.kanbanVisible {
+			m.kanban.CursorUp()
+		} else {
+			m.list.Up()
+		}
 		return m, m.instanceChanged()
 	case keys.KeyDown:
-		m.list.Down()
+		if m.kanbanVisible {
+			m.kanban.CursorDown()
+		} else {
+			m.list.Down()
+		}
 		return m, m.instanceChanged()
+	case keys.KeyLeft:
+		if m.kanbanVisible {
+			m.kanban.CursorLeft()
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyRight:
+		if m.kanbanVisible {
+			m.kanban.CursorRight()
+			return m, m.instanceChanged()
+		}
+		return m, nil
 	case keys.KeyShiftUp:
 		m.tabbedWindow.ScrollUp()
 		return m, m.instanceChanged()
@@ -722,7 +753,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 		return m, m.instanceChanged()
 	case keys.KeyKill:
-		selected := m.list.GetSelectedInstance()
+		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
@@ -760,7 +791,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
 		return m, m.confirmAction(message, killAction)
 	case keys.KeySubmit:
-		selected := m.list.GetSelectedInstance()
+		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
@@ -786,10 +817,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
-		selected := m.list.GetSelectedInstance()
+		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
+
+		// When kanban is visible, copy tmux session name to clipboard
+		if m.kanbanVisible {
+			tmuxName := selected.GetTmuxSessionName()
+			if tmuxName == "" {
+				return m, m.handleError(fmt.Errorf("no tmux session name for '%s'", selected.Title))
+			}
+			if err := copyToClipboard(tmuxName); err != nil {
+				return m, m.handleError(fmt.Errorf("failed to copy to clipboard: %w", err))
+			}
+			return m, m.handleError(fmt.Errorf("Copied tmux session name: %s", tmuxName))
+		}
+
 		if selected.IsExternal() {
 			return m, m.handleError(fmt.Errorf("cannot checkout external session '%s' (managed by Claude Code)", selected.Title))
 		}
@@ -804,7 +848,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		})
 		return m, nil
 	case keys.KeyResume:
-		selected := m.list.GetSelectedInstance()
+		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
@@ -819,7 +863,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if m.list.NumInstances() == 0 {
 			return m, nil
 		}
-		selected := m.list.GetSelectedInstance()
+		selected := m.getActiveInstance()
 		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
@@ -852,17 +896,42 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, attachCmd
 	case keys.KeyKanban:
 		m.kanbanVisible = !m.kanbanVisible
-		return m, tea.WindowSize()
+		if m.kanbanVisible {
+			// Initialize kanban cursor from current list selection
+			if inst := m.list.GetSelectedInstance(); inst != nil {
+				m.kanban.SetCursorToInstance(inst)
+			}
+		} else {
+			// Sync list selection to kanban cursor
+			if inst := m.kanban.GetCursorInstance(); inst != nil {
+				m.list.SelectInstance(inst)
+			}
+		}
+		return m, tea.Batch(m.instanceChanged(), tea.WindowSize())
 	default:
 		return m, nil
 	}
+}
+
+// getActiveInstance returns the instance that should be acted upon.
+// When kanban is visible, it returns the kanban cursor instance; otherwise, the list selection.
+func (m *home) getActiveInstance() *session.Instance {
+	if m.kanbanVisible {
+		return m.kanban.GetCursorInstance()
+	}
+	return m.list.GetSelectedInstance()
 }
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
-	selected := m.list.GetSelectedInstance()
+	selected := m.getActiveInstance()
+
+	// When kanban is visible, sync the list selection so downstream code works
+	if m.kanbanVisible && selected != nil {
+		m.list.SelectInstance(selected)
+	}
 
 	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
@@ -1035,74 +1104,10 @@ func (m *home) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 	} else if m.kanbanVisible && m.bounds.kanban.Contains(x, y) {
 		localX := x - m.bounds.kanban.X
 		localY := y - m.bounds.kanban.Y
-		if inst, action := m.kanban.HandleClick(localX, localY); inst != nil {
-			// Select the instance in the list first
+		if inst := m.kanban.HandleClick(localX, localY); inst != nil {
+			m.kanban.SetCursorToInstance(inst)
 			m.list.SelectInstance(inst)
-			cmd := m.instanceChanged()
-
-			switch action {
-			case "send":
-				// Enter prompt state
-				m.state = statePrompt
-				m.menu.SetState(ui.StatePrompt)
-				m.textInputOverlay = m.newPromptOverlay()
-				return m, tea.Batch(cmd, tea.WindowSize())
-			case "open":
-				if inst.Paused() || inst.Status == session.Loading || !inst.TmuxAlive() {
-					return m, cmd
-				}
-				execCmd, err := m.list.ExecAttach()
-				if err != nil {
-					return m, tea.Batch(cmd, m.handleError(err))
-				}
-				return m, tea.Batch(cmd, tea.Exec(execCmd, func(err error) tea.Msg {
-					return attachFinishedMsg{err: err}
-				}))
-			case "stop":
-				// Same as KeyKill / checkout flow
-				if inst.Status == session.Loading {
-					return m, cmd
-				}
-				if err := inst.Pause(); err != nil {
-					return m, tea.Batch(cmd, m.handleError(err))
-				}
-				m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
-				return m, tea.Batch(cmd, m.instanceChanged())
-			case "resume":
-				if inst.IsExternal() {
-					return m, tea.Batch(cmd, m.handleError(fmt.Errorf("cannot resume external session")))
-				}
-				if err := inst.Resume(); err != nil {
-					return m, tea.Batch(cmd, m.handleError(err))
-				}
-				return m, tea.Batch(cmd, tea.WindowSize())
-			case "delete":
-				// Use the same kill flow as KeyKill
-				killAction := func() tea.Msg {
-					worktree, err := inst.GetGitWorktree()
-					if err != nil {
-						return err
-					}
-					checkedOut, err := worktree.IsBranchCheckedOut()
-					if err != nil {
-						return err
-					}
-					if checkedOut {
-						return fmt.Errorf("instance %s is currently checked out", inst.Title)
-					}
-					m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
-					if err := m.storage.DeleteInstance(inst.Title); err != nil {
-						return err
-					}
-					m.list.Kill()
-					return instanceChangedMsg{}
-				}
-				message := fmt.Sprintf("[!] Kill session '%s'?", inst.Title)
-				return m, tea.Batch(cmd, m.confirmAction(message, killAction))
-			default:
-				// Just selection, no action
-				return m, cmd
-			}
+			return m, m.instanceChanged()
 		}
 	}
 
@@ -1133,7 +1138,7 @@ func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, te
 	}
 
 	// Default: scroll the preview/diff/terminal pane
-	selected := m.list.GetSelectedInstance()
+	selected := m.getActiveInstance()
 	if selected == nil || selected.Status == session.Paused {
 		return m, nil
 	}
@@ -1146,14 +1151,14 @@ func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, te
 }
 
 func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
 
 	var listAndPreview string
 	if m.kanbanVisible {
 		kanbanWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.kanban.String())
-		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding, kanbanWithPadding)
+		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, kanbanWithPadding, previewWithPadding)
 	} else {
+		listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
 		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
 	}
 
@@ -1182,4 +1187,19 @@ func (m *home) View() string {
 	}
 
 	return mainView
+}
+
+// copyToClipboard copies text to the system clipboard.
+func copyToClipboard(text string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		cmd = exec.Command("xclip", "-selection", "clipboard")
+	default:
+		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
 }
