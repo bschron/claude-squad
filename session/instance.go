@@ -104,6 +104,11 @@ func (i *Instance) IsExternal() bool {
 	return i.isExternal
 }
 
+// SetManaged converts an external session to a managed session.
+func (i *Instance) SetManaged() {
+	i.isExternal = false
+}
+
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	skipPerms := i.SkipPermissions

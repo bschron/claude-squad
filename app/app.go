@@ -994,9 +994,19 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		// When kanban is visible, copy tmux session name to clipboard
 		if selected.IsExternal() {
-			return m, m.handleError(fmt.Errorf("cannot checkout external session '%s' (managed by Claude Code)", selected.Title))
+			// Show confirmation before taking ownership of external session
+			message := fmt.Sprintf("[!] Checkout external session '%s'? This will stop the running Claude Code process.", selected.Title)
+			checkoutAction := func() tea.Msg {
+				selected.SetManaged()
+				if err := selected.Pause(); err != nil {
+					return err
+				}
+				m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+				m.instanceChanged()
+				return nil
+			}
+			return m, m.confirmAction(message, checkoutAction)
 		}
 
 		// Show help screen before pausing
@@ -1012,9 +1022,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
-		}
-		if selected.IsExternal() {
-			return m, m.handleError(fmt.Errorf("cannot resume external session '%s' (managed by Claude Code)", selected.Title))
 		}
 		if selected.Paused() {
 			if err := selected.Resume(); err != nil {
