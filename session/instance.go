@@ -619,7 +619,7 @@ func (i *Instance) Resume() error {
 	}
 
 	// Build program with flags for Claude
-	startProgram := i.buildStartProgram()
+	startProgram := i.buildStartProgram("--continue")
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {
