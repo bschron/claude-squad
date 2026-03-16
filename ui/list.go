@@ -297,14 +297,16 @@ func (l *List) String() string {
 		if len(g.indices) == 0 {
 			continue
 		}
+		// Render labeled divider for every group.
+		// First group: just the label line + \n (2 lines).
+		// Subsequent groups: \n + label line + \n (3 lines, extra spacing).
+		label := fmt.Sprintf(" ── %s ", g.label)
+		line := label + strings.Repeat("─", max(0, dividerWidth-runewidth.StringWidth(label)))
 		if !firstGroup {
-			// Render labeled divider: \n + dim line + \n (3 lines total vs 2-line normal gap)
-			label := fmt.Sprintf(" ── %s ", g.label)
-			line := label + strings.Repeat("─", max(0, dividerWidth-runewidth.StringWidth(label)))
-			b.WriteString("\n")
-			b.WriteString(dividerStyle.Render(line))
 			b.WriteString("\n")
 		}
+		b.WriteString(dividerStyle.Render(line))
+		b.WriteString("\n")
 		firstGroup = false
 
 		for j, itemIdx := range g.indices {
@@ -475,7 +477,8 @@ func (l *List) IndexAtY(localY int) int {
 	const headerLines = 5
 	const itemHeight = 4
 	const itemGap = 2
-	const dividerLines = 3 // \n + label line + \n
+	const firstDividerLines = 2 // label line + \n
+	const dividerLines = 3     // \n + label line + \n
 
 	// Build groups to walk through the layout
 	groups := l.buildDisplayOrder()
@@ -490,12 +493,14 @@ func (l *List) IndexAtY(localY int) int {
 		if len(g.indices) == 0 {
 			continue
 		}
-		if !firstGroup {
-			// Divider between groups
+		// Every group has a label header
+		if firstGroup {
+			y -= firstDividerLines
+		} else {
 			y -= dividerLines
-			if y < 0 {
-				return -1
-			}
+		}
+		if y < 0 {
+			return -1
 		}
 		firstGroup = false
 

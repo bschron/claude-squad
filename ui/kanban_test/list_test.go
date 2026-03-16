@@ -24,13 +24,14 @@ func TestList_IndexAtY(t *testing.T) {
 	list.AddInstance(inst2)
 	list.AddInstance(inst3)
 
-	// Layout with dividers between groups:
+	// Layout with group headers:
 	//   y=0..4: header (5 lines)
-	//   y=5..8: item-1 (Running group, 4 lines)
-	//   y=9..11: divider to IDLE (3 lines)
-	//   y=12..15: item-2 (Idle group, 4 lines)
-	//   y=16..18: divider to COMPLETED (3 lines)
-	//   y=19..22: item-3 (Completed group, 4 lines)
+	//   y=5..6: RUNNING label (2 lines: label + \n)
+	//   y=7..10: item-1 (Running group, 4 lines)
+	//   y=11..13: IDLE divider (3 lines: \n + label + \n)
+	//   y=14..17: item-2 (Idle group, 4 lines)
+	//   y=18..20: COMPLETED divider (3 lines: \n + label + \n)
+	//   y=21..24: item-3 (Completed group, 4 lines)
 
 	t.Run("header area returns -1", func(t *testing.T) {
 		for y := 0; y < 5; y++ {
@@ -38,32 +39,38 @@ func TestList_IndexAtY(t *testing.T) {
 		}
 	})
 
+	t.Run("first group label returns -1", func(t *testing.T) {
+		for y := 5; y < 7; y++ {
+			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in group label", y)
+		}
+	})
+
 	t.Run("first item area returns 0", func(t *testing.T) {
-		for y := 5; y < 9; y++ {
+		for y := 7; y < 11; y++ {
 			assert.Equal(t, 0, list.IndexAtY(y), "Y=%d should map to item 0", y)
 		}
 	})
 
 	t.Run("divider between running and idle returns -1", func(t *testing.T) {
-		for y := 9; y < 12; y++ {
+		for y := 11; y < 14; y++ {
 			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in divider", y)
 		}
 	})
 
 	t.Run("second item area returns 1", func(t *testing.T) {
-		for y := 12; y < 16; y++ {
+		for y := 14; y < 18; y++ {
 			assert.Equal(t, 1, list.IndexAtY(y), "Y=%d should map to item 1", y)
 		}
 	})
 
 	t.Run("divider between idle and completed returns -1", func(t *testing.T) {
-		for y := 16; y < 19; y++ {
+		for y := 18; y < 21; y++ {
 			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in divider", y)
 		}
 	})
 
 	t.Run("third item area returns 2", func(t *testing.T) {
-		for y := 19; y < 23; y++ {
+		for y := 21; y < 25; y++ {
 			assert.Equal(t, 2, list.IndexAtY(y), "Y=%d should map to item 2", y)
 		}
 	})
@@ -82,7 +89,7 @@ func TestList_IndexAtY_SameStatusGroup(t *testing.T) {
 	list := ui.NewList(&sp, false)
 	list.SetSize(80, 60)
 
-	// Two items in the same group — no divider between them, just normal gap.
+	// Two items in the same group — group header + normal gap between items.
 	inst1 := makeTestInstance("run-1", session.Running, "b1")
 	inst2 := makeTestInstance("run-2", session.Running, "b2")
 	list.AddInstance(inst1)
@@ -90,24 +97,25 @@ func TestList_IndexAtY_SameStatusGroup(t *testing.T) {
 
 	// Layout:
 	//   y=0..4: header
-	//   y=5..8: run-1 (4 lines)
-	//   y=9..10: gap (2 lines, normal within-group gap)
-	//   y=11..14: run-2 (4 lines)
+	//   y=5..6: RUNNING label (2 lines)
+	//   y=7..10: run-1 (4 lines)
+	//   y=11..12: gap (2 lines, normal within-group gap)
+	//   y=13..16: run-2 (4 lines)
 
 	t.Run("first item", func(t *testing.T) {
-		for y := 5; y < 9; y++ {
+		for y := 7; y < 11; y++ {
 			assert.Equal(t, 0, list.IndexAtY(y), "Y=%d should map to item 0", y)
 		}
 	})
 
 	t.Run("gap within group returns -1", func(t *testing.T) {
-		for y := 9; y < 11; y++ {
+		for y := 11; y < 13; y++ {
 			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in gap", y)
 		}
 	})
 
 	t.Run("second item", func(t *testing.T) {
-		for y := 11; y < 15; y++ {
+		for y := 13; y < 17; y++ {
 			assert.Equal(t, 1, list.IndexAtY(y), "Y=%d should map to item 1", y)
 		}
 	})
@@ -140,33 +148,24 @@ func TestList_Navigation_CrossGroup(t *testing.T) {
 	_ = list.String()
 
 	// Display order: Running(idx=1), Ready(idx=2), Paused(idx=0)
-	// Initial selection is idx=0 (Paused), which is last in display order.
-
-	// Select the first display item (Running, idx=1).
 	list.SetSelectedIndex(1)
 	assert.Equal(t, inst2, list.GetSelectedInstance(), "should start at Running")
 
-	// Down should go to Ready (idx=2).
 	list.Down()
 	assert.Equal(t, inst3, list.GetSelectedInstance(), "Down from Running should go to Ready")
 
-	// Down again should go to Paused (idx=0).
 	list.Down()
 	assert.Equal(t, inst1, list.GetSelectedInstance(), "Down from Ready should go to Paused")
 
-	// Down at end should stay.
 	list.Down()
 	assert.Equal(t, inst1, list.GetSelectedInstance(), "Down at end should stay")
 
-	// Up should go back to Ready (idx=2).
 	list.Up()
 	assert.Equal(t, inst3, list.GetSelectedInstance(), "Up from Paused should go to Ready")
 
-	// Up again should go to Running (idx=1).
 	list.Up()
 	assert.Equal(t, inst2, list.GetSelectedInstance(), "Up from Ready should go to Running")
 
-	// Up at start should stay.
 	list.Up()
 	assert.Equal(t, inst2, list.GetSelectedInstance(), "Up at start should stay")
 }
