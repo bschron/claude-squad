@@ -54,12 +54,21 @@ var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
+var dividerStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#cccccc", Dark: "#444444"})
+
+type statusGroup struct {
+	label   string
+	indices []int
+}
+
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
+	displayOrder  []int
 
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
@@ -73,6 +82,31 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		repos:    make(map[string]int),
 		autoyes:  autoYes,
 	}
+}
+
+// buildDisplayOrder groups items by status and returns the groups and a flat display order.
+func (l *List) buildDisplayOrder() []statusGroup {
+	buckets := []statusGroup{
+		{label: "RUNNING"},
+		{label: "IDLE"},
+		{label: "COMPLETED"},
+	}
+	for i, item := range l.items {
+		switch item.Status {
+		case session.Running, session.Loading:
+			buckets[0].indices = append(buckets[0].indices, i)
+		case session.Ready:
+			buckets[1].indices = append(buckets[1].indices, i)
+		case session.Paused:
+			buckets[2].indices = append(buckets[2].indices, i)
+		}
+	}
+
+	l.displayOrder = nil
+	for _, g := range buckets {
+		l.displayOrder = append(l.displayOrder, g.indices...)
+	}
+	return buckets
 }
 
 // SetSize sets the height and width of the list.
@@ -253,11 +287,33 @@ func (l *List) String() string {
 	b.WriteString("\n")
 	b.WriteString("\n")
 
-	// Render the list.
-	for i, item := range l.items {
-		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1))
-		if i != len(l.items)-1 {
-			b.WriteString("\n\n")
+	// Build grouped display order.
+	groups := l.buildDisplayOrder()
+	displayNum := 1
+	firstGroup := true
+	dividerWidth := AdjustPreviewWidth(l.width) + 2
+
+	for _, g := range groups {
+		if len(g.indices) == 0 {
+			continue
+		}
+		if !firstGroup {
+			// Render labeled divider: \n + dim line + \n (3 lines total vs 2-line normal gap)
+			label := fmt.Sprintf(" ── %s ", g.label)
+			line := label + strings.Repeat("─", max(0, dividerWidth-runewidth.StringWidth(label)))
+			b.WriteString("\n")
+			b.WriteString(dividerStyle.Render(line))
+			b.WriteString("\n")
+		}
+		firstGroup = false
+
+		for j, itemIdx := range g.indices {
+			item := l.items[itemIdx]
+			b.WriteString(l.renderer.Render(item, displayNum, itemIdx == l.selectedIdx, len(l.repos) > 1))
+			displayNum++
+			if j != len(g.indices)-1 {
+				b.WriteString("\n\n")
+			}
 		}
 	}
 	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
@@ -267,6 +323,16 @@ func (l *List) String() string {
 func (l *List) Down() {
 	if len(l.items) == 0 {
 		return
+	}
+	if l.displayOrder != nil {
+		for i, idx := range l.displayOrder {
+			if idx == l.selectedIdx {
+				if i < len(l.displayOrder)-1 {
+					l.selectedIdx = l.displayOrder[i+1]
+				}
+				return
+			}
+		}
 	}
 	if l.selectedIdx < len(l.items)-1 {
 		l.selectedIdx++
@@ -317,6 +383,16 @@ func (l *List) ExecAttach() (tea.ExecCommand, error) {
 func (l *List) Up() {
 	if len(l.items) == 0 {
 		return
+	}
+	if l.displayOrder != nil {
+		for i, idx := range l.displayOrder {
+			if idx == l.selectedIdx {
+				if i > 0 {
+					l.selectedIdx = l.displayOrder[i-1]
+				}
+				return
+			}
+		}
 	}
 	if l.selectedIdx > 0 {
 		l.selectedIdx--
@@ -396,31 +472,46 @@ func (l *List) IndexAtY(localY int) int {
 		return -1
 	}
 
-	// The list layout starts with:
-	//   2 blank lines (\n\n) + 1 title line + 2 blank lines (\n\n) = offset 5
-	// Each rendered item is approximately 4 lines high (title with top padding,
-	// desc with bottom padding). Items are separated by 2 newlines (\n\n).
 	const headerLines = 5
 	const itemHeight = 4
 	const itemGap = 2
+	const dividerLines = 3 // \n + label line + \n
+
+	// Build groups to walk through the layout
+	groups := l.buildDisplayOrder()
 
 	y := localY - headerLines
 	if y < 0 {
 		return -1
 	}
 
-	// Each item block = itemHeight + itemGap (except the last which has no gap)
-	stride := itemHeight + itemGap
-	idx := y / stride
-	offset := y % stride
+	firstGroup := true
+	for _, g := range groups {
+		if len(g.indices) == 0 {
+			continue
+		}
+		if !firstGroup {
+			// Divider between groups
+			y -= dividerLines
+			if y < 0 {
+				return -1
+			}
+		}
+		firstGroup = false
 
-	// Only count clicks within the item area, not the gap
-	if offset >= itemHeight {
-		return -1
-	}
-
-	if idx >= 0 && idx < len(l.items) {
-		return idx
+		for j, itemIdx := range g.indices {
+			if y < itemHeight {
+				return itemIdx
+			}
+			y -= itemHeight
+			// Gap between items within same group (not after last item in group)
+			if j < len(g.indices)-1 {
+				if y < itemGap {
+					return -1
+				}
+				y -= itemGap
+			}
+		}
 	}
 	return -1
 }
