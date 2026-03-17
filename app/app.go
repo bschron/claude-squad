@@ -324,14 +324,24 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, prompt := instance.HasUpdated()
 			if updated {
 				instance.SetStatus(session.Running)
+				instance.IdleSince = nil
 			} else {
 				if prompt {
 					instance.TapEnter()
 				} else {
-					if instance.Status == session.Running {
-						shouldPlaySound = true
+					if instance.IdleSince == nil {
+						// First idle tick — record timestamp, keep current status
+						now := time.Now()
+						instance.IdleSince = &now
+					} else if time.Since(*instance.IdleSince) >= 1*time.Second {
+						// Debounce expired — transition now
+						if instance.Status == session.Running {
+							shouldPlaySound = true
+						}
+						instance.SetStatus(session.Ready)
+						instance.IdleSince = nil
 					}
-					instance.SetStatus(session.Ready)
+					// else: still within debounce window, do nothing
 				}
 			}
 			if err := instance.UpdateDiffStats(); err != nil {

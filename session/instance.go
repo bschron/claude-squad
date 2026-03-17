@@ -97,6 +97,10 @@ type Instance struct {
 	// isExternal is true for sessions discovered from external tools (e.g. Claude Code --worktree).
 	// External sessions are not persisted to state.json and destructive operations are blocked.
 	isExternal bool
+
+	// IdleSince tracks when the instance first became idle (no content changes).
+	// Used to debounce the Running→Ready transition by 1 second.
+	IdleSince *time.Time
 }
 
 // IsExternal returns true if this instance was discovered from an external tool.
