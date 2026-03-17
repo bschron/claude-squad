@@ -23,6 +23,7 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+// GlobalInstanceLimit is the fallback instance limit when no project config is set.
 const GlobalInstanceLimit = 10
 
 // Run is the main entrypoint into the application.
@@ -859,9 +860,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if m.list.NumInstances() >= m.projectConfig.GetInstanceLimit() {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d instances", m.projectConfig.GetInstanceLimit()))
 		}
 
 		// Start a background fetch so branches are up to date by the time the picker opens
@@ -888,9 +889,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, fetchCmd
 	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if m.list.NumInstances() >= m.projectConfig.GetInstanceLimit() {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d instances", m.projectConfig.GetInstanceLimit()))
 		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",

@@ -164,12 +164,14 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 				m.projectConfig.GetSkipPermissions(),
 				m.projectConfig.GetSoundAlert(),
 				m.projectConfig.GetAlertSound(),
-				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool, soundAlert bool, alertSound config.SoundOption) {
+				m.projectConfig.GetInstanceLimit(),
+				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool, soundAlert bool, alertSound config.SoundOption, instanceLimit int) {
 					m.projectConfig.DefaultEffort = effort
 					m.projectConfig.DefaultModel = model
 					m.projectConfig.SetSkipPermissions(skipPerms)
 					m.projectConfig.SetSoundAlert(soundAlert)
 					m.projectConfig.AlertSound = alertSound
+					m.projectConfig.SetInstanceLimit(instanceLimit)
 					if err := config.SaveProjectConfig(m.projectDir, m.projectConfig); err != nil {
 						log.WarningLog.Printf("Failed to save project config: %v", err)
 					}

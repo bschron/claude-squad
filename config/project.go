@@ -24,6 +24,15 @@ var ValidEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, Effor
 // DefaultEffortLevel is the default effort level when none is configured.
 var DefaultEffortLevel = EffortMedium
 
+const (
+	DefaultInstanceLimit = 10
+	MinInstanceLimit     = 1
+	MaxInstanceLimit     = 50
+)
+
+// ValidInstanceLimits is the ordered list of valid instance limit options.
+var ValidInstanceLimits = []int{5, 10, 15, 20, 25, 50}
+
 // ModelOption represents the model option for Claude Code.
 type ModelOption string
 
@@ -110,6 +119,7 @@ type ProjectConfig struct {
 	SkipPermissions *bool       `json:"skip_permissions,omitempty"`
 	SoundAlert      *bool       `json:"sound_alert,omitempty"`
 	AlertSound      SoundOption `json:"alert_sound,omitempty"`
+	InstanceLimit   *int        `json:"instance_limit,omitempty"`
 }
 
 // GetSkipPermissions returns the effective skip permissions value (nil defaults to true).
@@ -123,6 +133,25 @@ func (c *ProjectConfig) GetSkipPermissions() bool {
 // SetSkipPermissions sets the skip permissions value.
 func (c *ProjectConfig) SetSkipPermissions(v bool) {
 	c.SkipPermissions = &v
+}
+
+// GetInstanceLimit returns the effective instance limit (nil defaults to DefaultInstanceLimit).
+func (c *ProjectConfig) GetInstanceLimit() int {
+	if c.InstanceLimit == nil {
+		return DefaultInstanceLimit
+	}
+	return *c.InstanceLimit
+}
+
+// SetInstanceLimit sets the instance limit value.
+func (c *ProjectConfig) SetInstanceLimit(v int) {
+	if v < MinInstanceLimit {
+		v = MinInstanceLimit
+	}
+	if v > MaxInstanceLimit {
+		v = MaxInstanceLimit
+	}
+	c.InstanceLimit = &v
 }
 
 // GetSoundAlert returns the effective sound alert value (nil defaults to false).
@@ -175,6 +204,13 @@ func LoadProjectConfig(gitRoot string) *ProjectConfig {
 	// Validate the loaded alert sound
 	if cfg.AlertSound != "" && !isValidSound(cfg.AlertSound) {
 		cfg.AlertSound = ""
+	}
+
+	// Validate the loaded instance limit
+	if cfg.InstanceLimit != nil {
+		if *cfg.InstanceLimit < MinInstanceLimit || *cfg.InstanceLimit > MaxInstanceLimit {
+			cfg.InstanceLimit = nil
+		}
 	}
 
 	return cfg

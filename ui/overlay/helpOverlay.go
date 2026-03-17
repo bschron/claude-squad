@@ -31,26 +31,28 @@ var (
 )
 
 const (
-	configIndexEffort      = 0
-	configIndexModel       = 1
-	configIndexPermissions = 2
-	configIndexSoundAlert  = 3
-	configIndexAlertSound  = 4
-	configItemCount        = 5
+	configIndexEffort        = 0
+	configIndexModel         = 1
+	configIndexPermissions   = 2
+	configIndexSoundAlert    = 3
+	configIndexAlertSound    = 4
+	configIndexInstanceLimit = 5
+	configItemCount          = 6
 )
 
 // HelpOverlay combines read-only help text with an editable Configs section.
 type HelpOverlay struct {
-	helpContent      string
-	effortPicker     *EffortPicker
-	modelPicker      *ModelPicker
-	permissionToggle *PermissionToggle
-	soundToggle      *SoundToggle
-	soundPicker      *SoundPicker
-	configMode       bool
-	configIndex      int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound
-	onSave           func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption)
-	width            int
+	helpContent        string
+	effortPicker       *EffortPicker
+	modelPicker        *ModelPicker
+	permissionToggle   *PermissionToggle
+	soundToggle        *SoundToggle
+	soundPicker        *SoundPicker
+	instanceLimitPicker *InstanceLimitPicker
+	configMode         bool
+	configIndex        int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound, 5=instance limit
+	onSave             func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int)
+	width              int
 }
 
 // NewHelpOverlay creates a new help overlay with the given content and defaults.
@@ -61,16 +63,18 @@ func NewHelpOverlay(
 	defaultSkipPerms bool,
 	defaultSoundAlert bool,
 	defaultAlertSound config.SoundOption,
-	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption),
+	defaultInstanceLimit int,
+	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int),
 ) *HelpOverlay {
 	return &HelpOverlay{
-		helpContent:      helpContent,
-		effortPicker:     NewEffortPicker(defaultEffort),
-		modelPicker:      NewModelPicker(defaultModel),
-		permissionToggle: NewPermissionToggle(defaultSkipPerms),
-		soundToggle:      NewSoundToggle(defaultSoundAlert),
-		soundPicker:      NewSoundPicker(defaultAlertSound),
-		onSave:           onSave,
+		helpContent:         helpContent,
+		effortPicker:        NewEffortPicker(defaultEffort),
+		modelPicker:         NewModelPicker(defaultModel),
+		permissionToggle:    NewPermissionToggle(defaultSkipPerms),
+		soundToggle:         NewSoundToggle(defaultSoundAlert),
+		soundPicker:         NewSoundPicker(defaultAlertSound),
+		instanceLimitPicker: NewInstanceLimitPicker(defaultInstanceLimit),
+		onSave:              onSave,
 	}
 }
 
@@ -93,6 +97,9 @@ func (h *HelpOverlay) SetWidth(width int) {
 	if h.soundPicker != nil {
 		h.soundPicker.SetWidth(innerWidth)
 	}
+	if h.instanceLimitPicker != nil {
+		h.instanceLimitPicker.SetWidth(innerWidth)
+	}
 }
 
 // focusCurrentConfig focuses the config item at configIndex.
@@ -108,6 +115,8 @@ func (h *HelpOverlay) focusCurrentConfig() {
 		h.soundToggle.Focus()
 	case configIndexAlertSound:
 		h.soundPicker.Focus()
+	case configIndexInstanceLimit:
+		h.instanceLimitPicker.Focus()
 	}
 }
 
@@ -124,6 +133,8 @@ func (h *HelpOverlay) blurCurrentConfig() {
 		h.soundToggle.Blur()
 	case configIndexAlertSound:
 		h.soundPicker.Blur()
+	case configIndexInstanceLimit:
+		h.instanceLimitPicker.Blur()
 	}
 }
 
@@ -166,6 +177,8 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 				h.soundToggle.HandleKeyPress(msg)
 			case configIndexAlertSound:
 				h.soundPicker.HandleKeyPress(msg)
+			case configIndexInstanceLimit:
+				h.instanceLimitPicker.HandleKeyPress(msg)
 			}
 			return false
 		default:
@@ -189,6 +202,7 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			h.permissionToggle.GetSkipPermissions(),
 			h.soundToggle.GetEnabled(),
 			h.soundPicker.GetSelectedSound(),
+			h.instanceLimitPicker.GetSelectedLimit(),
 		)
 	}
 	return true
@@ -257,6 +271,15 @@ func (h *HelpOverlay) Render() string {
 		b.WriteString(h.soundPicker.Render())
 		b.WriteString("\n\n")
 	}
+
+	// Instance limit picker
+	if h.configMode && h.configIndex == configIndexInstanceLimit {
+		b.WriteString(hoActiveIndicator.Render("> "))
+	} else if h.configMode {
+		b.WriteString("  ")
+	}
+	b.WriteString(h.instanceLimitPicker.Render())
+	b.WriteString("\n\n")
 
 	b.WriteString(divider)
 	b.WriteString("\n\n")
