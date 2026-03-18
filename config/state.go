@@ -19,6 +19,8 @@ type InstanceStorage interface {
 	SaveInstances(instancesJSON json.RawMessage) error
 	// GetInstances returns the raw instance data
 	GetInstances() json.RawMessage
+	// ReadInstancesFromDisk reads fresh instance data from disk, bypassing the in-memory cache
+	ReadInstancesFromDisk() (json.RawMessage, error)
 	// DeleteAllInstances removes all stored instances
 	DeleteAllInstances() error
 }
@@ -117,6 +119,24 @@ func (s *State) SaveInstances(instancesJSON json.RawMessage) error {
 // GetInstances returns the raw instance data
 func (s *State) GetInstances() json.RawMessage {
 	return s.InstancesData
+}
+
+// ReadInstancesFromDisk reads fresh instance data directly from disk, bypassing the in-memory cache.
+// This is needed to detect changes made by other running instances.
+func (s *State) ReadInstancesFromDisk() (json.RawMessage, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config directory: %w", err)
+	}
+	data, err := os.ReadFile(filepath.Join(configDir, StateFileName))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read state file: %w", err)
+	}
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse state file: %w", err)
+	}
+	return state.InstancesData, nil
 }
 
 // DeleteAllInstances removes all stored instances

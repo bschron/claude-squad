@@ -209,9 +209,12 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 }
 
 // GetStoredTitles returns the set of instance titles currently in storage.
-// This is a lightweight operation that parses JSON without creating full Instance objects.
+// This reads directly from disk to detect changes made by other running instances.
 func (s *Storage) GetStoredTitles() (map[string]bool, error) {
-	jsonData := s.state.GetInstances()
+	jsonData, err := s.state.ReadInstancesFromDisk()
+	if err != nil {
+		return nil, err
+	}
 	var data []InstanceData
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return nil, err
