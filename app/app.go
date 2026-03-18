@@ -379,6 +379,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = session.DeleteNote(m.projectDir, dead.Title)
 				m.list.RemoveInstance(dead)
 			}
+			// Persist removal so no future save can re-add the killed session.
+			if err := m.saveAllInstances(); err != nil {
+				log.ErrorLog.Printf("failed to save after removing dead instances: %v", err)
+			}
 		}
 
 		shouldPlaySound := false

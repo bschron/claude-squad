@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -116,26 +117,55 @@ func (s *Storage) LoadInstancesForProject(repoPath string) ([]*Instance, error) 
 
 // SaveInstancesForProject saves the project's instances while preserving
 // instances that belong to other projects.
+//
+// Other projects' instances are read from DISK (not the stale in-memory cache)
+// to avoid resurrecting sessions that were killed by another cs instance.
 func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*Instance) error {
-	all, err := s.LoadInstances()
+	// Read from DISK (not stale cache) to get the latest state.
+	diskJSON, err := s.state.ReadInstancesFromDisk()
 	if err != nil {
-		// If we can't load existing data, fall back to saving what we have.
 		return s.SaveInstances(projectInstances)
 	}
 
-	// Keep instances from other projects (non-empty, different repo path).
-	var merged []*Instance
-	for _, inst := range all {
-		data := inst.ToInstanceData()
-		if data.Worktree.RepoPath != "" && data.Worktree.RepoPath != repoPath {
-			merged = append(merged, inst)
+	var diskData []InstanceData
+	if err := json.Unmarshal(diskJSON, &diskData); err != nil {
+		return s.SaveInstances(projectInstances)
+	}
+
+	// Build disk titles set for filtering current project's killed sessions.
+	diskTitles := make(map[string]bool, len(diskData))
+	for _, d := range diskData {
+		diskTitles[d.Title] = true
+	}
+
+	// Keep other projects from disk (fresh state, not stale cache).
+	otherProjectData := make([]InstanceData, 0)
+	for _, d := range diskData {
+		if d.Worktree.RepoPath != "" && d.Worktree.RepoPath != repoPath {
+			otherProjectData = append(otherProjectData, d)
 		}
 	}
 
-	// Append the current project's instances.
-	merged = append(merged, projectInstances...)
+	// Convert current project instances, skipping killed paused sessions.
+	currentProjectData := make([]InstanceData, 0)
+	for _, inst := range projectInstances {
+		if !inst.Started() || inst.IsExternal() {
+			continue
+		}
+		if inst.Paused() && !diskTitles[inst.Title] {
+			log.WarningLog.Printf("skipping externally killed session during save: %s", inst.Title)
+			continue
+		}
+		currentProjectData = append(currentProjectData, inst.ToInstanceData())
+	}
 
-	return s.SaveInstances(merged)
+	// Merge and save.
+	allData := append(otherProjectData, currentProjectData...)
+	jsonBytes, err := json.Marshal(allData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+	return s.state.SaveInstances(jsonBytes)
 }
 
 // LoadInstancesForProjects loads instances filtered by multiple repository paths.
