@@ -3,10 +3,13 @@ package ui
 import (
 	"claude-squad/session"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // cardBound tracks the screen position of a rendered card for click detection.
@@ -25,6 +28,10 @@ type KanbanBoard struct {
 	cardBounds    []cardBound
 	cursorCol     int // 0-2: which column
 	cursorIdx     int // index within column
+
+	// Multi-project grouping
+	projectGroups  []string // ordered repo paths (current first); empty = single-project
+	currentProject string
 }
 
 // NewKanbanBoard creates a new kanban board panel.
@@ -38,6 +45,32 @@ func NewKanbanBoard(spinner *spinner.Model) *KanbanBoard {
 func (kb *KanbanBoard) SetSize(width, height int) {
 	kb.width = width
 	kb.height = height
+}
+
+// SetProjectGroups enables multi-project grouping mode.
+func (kb *KanbanBoard) SetProjectGroups(currentProject string, projects []string) {
+	kb.currentProject = currentProject
+	kb.projectGroups = projects
+}
+
+// ClearProjectGroups disables multi-project grouping mode.
+func (kb *KanbanBoard) ClearProjectGroups() {
+	kb.currentProject = ""
+	kb.projectGroups = nil
+}
+
+// IsMultiProject returns true if the kanban board is in multi-project mode.
+func (kb *KanbanBoard) IsMultiProject() bool {
+	return len(kb.projectGroups) > 1
+}
+
+// instanceRepoPath returns the repo path for an instance, defaulting to currentProject if empty.
+func (kb *KanbanBoard) instanceRepoPath(inst *session.Instance) string {
+	rp := inst.ToInstanceData().Worktree.RepoPath
+	if rp == "" {
+		return kb.currentProject
+	}
+	return rp
 }
 
 // UpdateInstances classifies instances into columns based on their status and
@@ -60,6 +93,21 @@ func (kb *KanbanBoard) UpdateInstances(instances []*session.Instance, selected *
 			kb.columns[1] = append(kb.columns[1], inst)
 		case session.Paused:
 			kb.columns[2] = append(kb.columns[2], inst)
+		}
+	}
+
+	// In multi-project mode, sort each column by project order
+	if kb.IsMultiProject() {
+		projectIndex := make(map[string]int, len(kb.projectGroups))
+		for i, p := range kb.projectGroups {
+			projectIndex[p] = i
+		}
+		for col := 0; col < 3; col++ {
+			sort.SliceStable(kb.columns[col], func(i, j int) bool {
+				pi := projectIndex[kb.instanceRepoPath(kb.columns[col][i])]
+				pj := projectIndex[kb.instanceRepoPath(kb.columns[col][j])]
+				return pi < pj
+			})
 		}
 	}
 
@@ -160,10 +208,37 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 	}
 
 	visibleStart := kb.scrollOffset[colIdx]
+	multiProject := kb.IsMultiProject()
 
+	subHeaderStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"}).
+		Italic(true)
+
+	lastProject := ""
 	usedHeight := 0
 	for idx := visibleStart; idx < len(instances); idx++ {
 		inst := instances[idx]
+
+		// Insert project sub-header when the project changes
+		if multiProject {
+			rp := kb.instanceRepoPath(inst)
+			if rp != lastProject {
+				label := filepath.Base(rp)
+				if rp == kb.currentProject {
+					label += " (current)"
+				}
+				hdr := fmt.Sprintf(" ── %s ", label)
+				hdr += strings.Repeat("─", max(0, cardWidth-runewidth.StringWidth(hdr)))
+				subHeaderHeight := 1
+				if usedHeight+subHeaderHeight > cardAreaHeight {
+					break
+				}
+				cardLines = append(cardLines, subHeaderStyle.Render(hdr))
+				usedHeight += subHeaderHeight
+				lastProject = rp
+			}
+		}
+
 		card := renderCard(inst, inst == kb.selectedInst, cardWidth, kb.spinner)
 		cardH := lipgloss.Height(card)
 
