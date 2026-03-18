@@ -448,7 +448,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelpScreen(helpStart(msg.instance), nil)
 		}
 
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		instChangedCmd := m.instanceChanged()
+	if m.kanbanVisible {
+		m.kanban.SetCursorToInstance(msg.instance)
+	}
+	return m, tea.Batch(tea.WindowSize(), instChangedCmd)
 	case attachFinishedMsg:
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
@@ -855,7 +859,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				}
 			}
 
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+			instChangedCmd := m.instanceChanged()
+			if m.kanbanVisible {
+				m.kanban.SetCursorToInstance(instance)
+			}
+			return m, tea.Batch(tea.WindowSize(), instChangedCmd, startCmd)
 		case tea.KeyRunes:
 			if runewidth.StringWidth(instance.Title) >= 32 {
 				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
@@ -951,7 +959,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 						}
 					}
 
-					return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+					instChangedCmd := m.instanceChanged()
+					if m.kanbanVisible {
+						m.kanban.SetCursorToInstance(selected)
+					}
+					return m, tea.Batch(tea.WindowSize(), instChangedCmd, startCmd)
 				}
 
 				// Regular flow: instance already running, just send prompt
