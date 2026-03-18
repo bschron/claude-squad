@@ -208,6 +208,21 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 	return s.SaveInstances(instances)
 }
 
+// GetStoredTitles returns the set of instance titles currently in storage.
+// This is a lightweight operation that parses JSON without creating full Instance objects.
+func (s *Storage) GetStoredTitles() (map[string]bool, error) {
+	jsonData := s.state.GetInstances()
+	var data []InstanceData
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return nil, err
+	}
+	titles := make(map[string]bool, len(data))
+	for _, d := range data {
+		titles[d.Title] = true
+	}
+	return titles, nil
+}
+
 // DeleteAllInstances removes all stored instances
 func (s *Storage) DeleteAllInstances() error {
 	return s.state.DeleteAllInstances()

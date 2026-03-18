@@ -347,13 +347,28 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case tickUpdateMetadataMessage:
-		// Prune instances killed externally (tmux dead + worktree gone).
+		// Prune instances killed externally by another cs instance.
 		var deadInstances []*session.Instance
+		var storedTitles map[string]bool
 		for _, instance := range m.list.GetInstances() {
-			if !instance.Started() || instance.Paused() {
+			if !instance.Started() || instance.IsExternal() {
 				continue
 			}
-			if !instance.TmuxAlive() && !instance.WorktreeExists() {
+			if instance.Paused() {
+				// Paused sessions: tmux/worktree are normally gone, check storage instead
+				if storedTitles == nil {
+					var err error
+					storedTitles, err = m.storage.GetStoredTitles()
+					if err != nil {
+						log.ErrorLog.Printf("could not load stored titles: %v", err)
+						break
+					}
+				}
+				if !storedTitles[instance.Title] {
+					deadInstances = append(deadInstances, instance)
+				}
+			} else if !instance.TmuxAlive() && !instance.WorktreeExists() {
+				// Non-paused: tmux dead + worktree gone = killed externally
 				deadInstances = append(deadInstances, instance)
 			}
 		}
