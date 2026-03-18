@@ -239,11 +239,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	var listWidth, tabsWidth, kanbanWidth int
 
-	if m.state == stateInteractive {
-		listWidth = 0
-		kanbanWidth = 0
-		tabsWidth = msg.Width
-	} else if m.kanbanVisible {
+	if m.kanbanVisible {
 		// 2-panel layout: kanban replaces list, kanban + preview
 		listWidth = 0
 		kanbanWidth = int(float32(msg.Width) * 0.4)
@@ -260,11 +256,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.kanban.SetSize(kanbanWidth, contentHeight)
 
 	// Populate layout bounds for mouse hit testing.
-	if m.state == stateInteractive {
-		m.bounds.list = ui.Rect{}
-		m.bounds.kanban = ui.Rect{}
-		m.bounds.preview = ui.Rect{X: 0, Y: 0, Width: tabsWidth, Height: contentHeight}
-	} else if m.kanbanVisible {
+	if m.kanbanVisible {
 		// Kanban at left, preview at right
 		m.bounds.list = ui.Rect{}
 		m.bounds.kanban = ui.Rect{X: 0, Y: 0, Width: kanbanWidth, Height: contentHeight}
@@ -461,7 +453,7 @@ func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
-		return m, tea.WindowSize()
+		return m, nil
 	}
 
 	selected := m.getActiveInstance()
@@ -470,7 +462,7 @@ func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
-		return m, tea.WindowSize()
+		return m, nil
 	}
 
 	translated := translateKeyMsg(msg)
@@ -553,6 +545,8 @@ func translateKeyMsg(msg tea.KeyMsg) string {
 		return "\x1b"
 	case tea.KeyCtrlC:
 		return "\x03"
+	case tea.KeyShiftTab:
+		return "\x1b[Z"
 	case tea.KeyDelete:
 		return "\x1b[3~"
 	case tea.KeyHome:
@@ -1138,7 +1132,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = stateInteractive
 		m.menu.SetState(ui.StateInteractive)
 		m.tabbedWindow.SetPreviewInteractive(true)
-		return m, tea.WindowSize()
+		return m, nil
 	case keys.KeyNotes:
 		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -1429,9 +1423,7 @@ func (m *home) View() string {
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
 
 	var listAndPreview string
-	if m.state == stateInteractive {
-		listAndPreview = previewWithPadding
-	} else if m.kanbanVisible {
+	if m.kanbanVisible {
 		kanbanWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.kanban.String())
 		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, kanbanWithPadding, previewWithPadding)
 	} else {
