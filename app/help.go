@@ -47,7 +47,7 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
 		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
 		keyStyle.Render("e")+descStyle.Render("         - Edit note for the selected session"),
-		keyStyle.Render("i")+descStyle.Render("         - Interactive mode (type into preview)"),
+		keyStyle.Render("i")+descStyle.Render("         - Interactive mode (ctrl-q to exit)"),
 		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
 		"",
 		headerStyle.Render("Handoff:"),

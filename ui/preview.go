@@ -191,7 +191,7 @@ func (p *PreviewPane) String() string {
 		footer := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00FF00")).
 			Bold(true).
-			Render("INTERACTIVE (ESC to exit)")
+			Render("INTERACTIVE (ctrl-q to exit)")
 		lines = append(lines, footer)
 	}
 

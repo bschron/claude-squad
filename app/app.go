@@ -239,7 +239,11 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	var listWidth, tabsWidth, kanbanWidth int
 
-	if m.kanbanVisible {
+	if m.state == stateInteractive {
+		listWidth = 0
+		kanbanWidth = 0
+		tabsWidth = msg.Width
+	} else if m.kanbanVisible {
 		// 2-panel layout: kanban replaces list, kanban + preview
 		listWidth = 0
 		kanbanWidth = int(float32(msg.Width) * 0.4)
@@ -256,7 +260,11 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.kanban.SetSize(kanbanWidth, contentHeight)
 
 	// Populate layout bounds for mouse hit testing.
-	if m.kanbanVisible {
+	if m.state == stateInteractive {
+		m.bounds.list = ui.Rect{}
+		m.bounds.kanban = ui.Rect{}
+		m.bounds.preview = ui.Rect{X: 0, Y: 0, Width: tabsWidth, Height: contentHeight}
+	} else if m.kanbanVisible {
 		// Kanban at left, preview at right
 		m.bounds.list = ui.Rect{}
 		m.bounds.kanban = ui.Rect{X: 0, Y: 0, Width: kanbanWidth, Height: contentHeight}
@@ -448,12 +456,12 @@ func (m *home) handleQuit() (tea.Model, tea.Cmd) {
 
 // handleInteractiveState handles key events in interactive mode, forwarding them to the tmux session.
 func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Escape exits interactive mode
-	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+	// Ctrl+Q exits interactive mode
+	if msg.Type == tea.KeyCtrlQ {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
-		return m, nil
+		return m, tea.WindowSize()
 	}
 
 	selected := m.getActiveInstance()
@@ -462,7 +470,7 @@ func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
-		return m, nil
+		return m, tea.WindowSize()
 	}
 
 	translated := translateKeyMsg(msg)
@@ -541,6 +549,10 @@ func translateKeyMsg(msg tea.KeyMsg) string {
 		return "\x19"
 	case tea.KeyCtrlZ:
 		return "\x1a"
+	case tea.KeyEsc:
+		return "\x1b"
+	case tea.KeyCtrlC:
+		return "\x03"
 	case tea.KeyDelete:
 		return "\x1b[3~"
 	case tea.KeyHome:
@@ -1126,7 +1138,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = stateInteractive
 		m.menu.SetState(ui.StateInteractive)
 		m.tabbedWindow.SetPreviewInteractive(true)
-		return m, nil
+		return m, tea.WindowSize()
 	case keys.KeyNotes:
 		selected := m.getActiveInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -1368,6 +1380,15 @@ func (m *home) handleMouseClick(x, y int) (tea.Model, tea.Cmd) {
 // handleMouseWheel routes scroll wheel events to the appropriate panel.
 func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, tea.Cmd) {
 	if m.state == stateInteractive {
+		selected := m.getActiveInstance()
+		if selected == nil || selected.Status == session.Paused {
+			return m, nil
+		}
+		if button == tea.MouseButtonWheelUp {
+			m.tabbedWindow.ScrollUp()
+		} else {
+			m.tabbedWindow.ScrollDown()
+		}
 		return m, nil
 	}
 	delta := 1
@@ -1408,7 +1429,9 @@ func (m *home) View() string {
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
 
 	var listAndPreview string
-	if m.kanbanVisible {
+	if m.state == stateInteractive {
+		listAndPreview = previewWithPadding
+	} else if m.kanbanVisible {
 		kanbanWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.kanban.String())
 		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, kanbanWithPadding, previewWithPadding)
 	} else {

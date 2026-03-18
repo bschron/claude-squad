@@ -224,7 +224,7 @@ func (m *Menu) SetSize(width, height int) {
 
 func (m *Menu) String() string {
 	if m.state == StateInteractive {
-		hint := descStyle.Render("ESC") + sepStyle.Render(" exit interactive")
+		hint := descStyle.Render("ctrl-q") + sepStyle.Render(" exit interactive")
 		centeredHint := menuStyle.Render(hint)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredHint)
 	}
