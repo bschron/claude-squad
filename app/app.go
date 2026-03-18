@@ -360,15 +360,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					var err error
 					storedTitles, err = m.storage.GetStoredTitles()
 					if err != nil {
-						log.ErrorLog.Printf("could not load stored titles: %v", err)
+						log.ErrorLog.Printf("[DIAG] GetStoredTitles failed: %v", err)
 						break
 					}
+					log.InfoLog.Printf("[DIAG] storedTitles from disk: %v", storedTitles)
 				}
-				if !storedTitles[instance.Title] {
+				inStorage := storedTitles[instance.Title]
+				log.InfoLog.Printf("[DIAG] paused session %q: inStorage=%v, started=%v", instance.Title, inStorage, instance.Started())
+				if !inStorage {
 					deadInstances = append(deadInstances, instance)
 				}
 			} else if !instance.TmuxAlive() && !instance.WorktreeExists() {
 				// Non-paused: tmux dead + worktree gone = killed externally
+				log.InfoLog.Printf("[DIAG] non-paused dead session %q: tmuxAlive=%v worktreeExists=%v", instance.Title, instance.TmuxAlive(), instance.WorktreeExists())
 				deadInstances = append(deadInstances, instance)
 			}
 		}

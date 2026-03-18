@@ -124,13 +124,22 @@ func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*I
 	// Read from DISK (not stale cache) to get the latest state.
 	diskJSON, err := s.state.ReadInstancesFromDisk()
 	if err != nil {
+		log.WarningLog.Printf("[DIAG] SaveInstancesForProject: ReadInstancesFromDisk failed: %v, falling back to cache", err)
 		return s.SaveInstances(projectInstances)
 	}
 
 	var diskData []InstanceData
 	if err := json.Unmarshal(diskJSON, &diskData); err != nil {
+		log.WarningLog.Printf("[DIAG] SaveInstancesForProject: unmarshal disk data failed: %v, falling back to cache", err)
 		return s.SaveInstances(projectInstances)
 	}
+
+	// Log all disk titles
+	diskTitlesList := make([]string, 0, len(diskData))
+	for _, d := range diskData {
+		diskTitlesList = append(diskTitlesList, d.Title)
+	}
+	log.InfoLog.Printf("[DIAG] SaveInstancesForProject(%s): disk has %d instances: %v", repoPath, len(diskData), diskTitlesList)
 
 	// Build disk titles set for filtering current project's killed sessions.
 	diskTitles := make(map[string]bool, len(diskData))
@@ -145,6 +154,7 @@ func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*I
 			otherProjectData = append(otherProjectData, d)
 		}
 	}
+	log.InfoLog.Printf("[DIAG] SaveInstancesForProject: keeping %d other-project instances from disk", len(otherProjectData))
 
 	// Convert current project instances, skipping killed paused sessions.
 	currentProjectData := make([]InstanceData, 0)
@@ -153,11 +163,13 @@ func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*I
 			continue
 		}
 		if inst.Paused() && !diskTitles[inst.Title] {
-			log.WarningLog.Printf("skipping externally killed session during save: %s", inst.Title)
+			log.WarningLog.Printf("[DIAG] SaveInstancesForProject: SKIPPING killed paused session %q (not on disk)", inst.Title)
 			continue
 		}
 		currentProjectData = append(currentProjectData, inst.ToInstanceData())
 	}
+	log.InfoLog.Printf("[DIAG] SaveInstancesForProject: saving %d current-project + %d other-project = %d total",
+		len(currentProjectData), len(otherProjectData), len(currentProjectData)+len(otherProjectData))
 
 	// Merge and save.
 	allData := append(otherProjectData, currentProjectData...)
