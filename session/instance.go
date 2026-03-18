@@ -536,6 +536,16 @@ func (i *Instance) Paused() bool {
 	return i.Status == Paused
 }
 
+// WorktreeExists returns true if the worktree directory exists on disk.
+func (i *Instance) WorktreeExists() bool {
+	path := i.GetWorktreePath()
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
 	if i.tmuxSession == nil {

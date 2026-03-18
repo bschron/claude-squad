@@ -519,6 +519,33 @@ func (l *List) Kill() {
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
 }
 
+// RemoveInstance removes an instance from the list without killing it
+// (used when the instance was already killed externally by another cs instance).
+func (l *List) RemoveInstance(instance *session.Instance) {
+	idx := -1
+	for i, item := range l.items {
+		if item == instance {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return
+	}
+
+	repoName, err := instance.RepoName()
+	if err != nil {
+		log.ErrorLog.Printf("could not get repo name: %v", err)
+	} else {
+		l.rmRepo(repoName)
+	}
+
+	if l.selectedIdx >= len(l.items)-1 && l.selectedIdx > 0 {
+		l.selectedIdx--
+	}
+	l.items = append(l.items[:idx], l.items[idx+1:]...)
+}
+
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()

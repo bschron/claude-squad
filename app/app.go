@@ -347,6 +347,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case tickUpdateMetadataMessage:
+		// Prune instances killed externally (tmux dead + worktree gone).
+		var deadInstances []*session.Instance
+		for _, instance := range m.list.GetInstances() {
+			if !instance.Started() || instance.Paused() {
+				continue
+			}
+			if !instance.TmuxAlive() && !instance.WorktreeExists() {
+				deadInstances = append(deadInstances, instance)
+			}
+		}
+		if len(deadInstances) > 0 {
+			for _, dead := range deadInstances {
+				log.WarningLog.Printf("removing externally killed session: %s", dead.Title)
+				m.tabbedWindow.CleanupTerminalForInstance(dead.Title)
+				_ = session.DeleteNote(m.projectDir, dead.Title)
+				m.list.RemoveInstance(dead)
+			}
+		}
+
 		shouldPlaySound := false
 		for _, instance := range m.list.GetInstances() {
 			if !instance.Started() || instance.Paused() {
@@ -383,7 +402,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if shouldPlaySound && m.projectConfig.GetSoundAlert() {
 			sound.Play(m.projectConfig.GetAlertSound())
 		}
-		return m, tickUpdateMetadataCmd
+		var cmds []tea.Cmd
+		cmds = append(cmds, tickUpdateMetadataCmd)
+		if len(deadInstances) > 0 {
+			cmds = append(cmds, m.instanceChanged())
+		}
+		return m, tea.Batch(cmds...)
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			x, y := msg.X, msg.Y
