@@ -222,6 +222,40 @@ func (m *Menu) SetSize(width, height int) {
 	m.height = height
 }
 
+// renderItem renders a single menu item and returns its styled text and plain-text width.
+func (m *Menu) renderItem(i int, k keys.KeyName) (string, int) {
+	binding := keys.GlobalkeyBindings[k]
+
+	localActionStyle := actionGroupStyle
+	localKeyStyle := keyStyle
+	localDescStyle := descStyle
+	if m.keyDown == k {
+		localActionStyle = localActionStyle.Underline(true)
+		localKeyStyle = localKeyStyle.Underline(true)
+		localDescStyle = localDescStyle.Underline(true)
+	}
+
+	var inActionGroup bool
+	switch m.state {
+	case StateEmpty:
+		inActionGroup = i <= 1
+	default:
+		if m.actionGroupIdx >= 0 && m.actionGroupIdx < len(m.groups) {
+			ag := m.groups[m.actionGroupIdx]
+			inActionGroup = i >= ag.start && i < ag.end
+		}
+	}
+
+	var text string
+	if inActionGroup {
+		text = localActionStyle.Render(binding.Help().Key) + " " + localActionStyle.Render(binding.Help().Desc)
+	} else {
+		text = localKeyStyle.Render(binding.Help().Key) + " " + localDescStyle.Render(binding.Help().Desc)
+	}
+	width := len(binding.Help().Key) + 1 + len(binding.Help().Desc)
+	return text, width
+}
+
 func (m *Menu) String() string {
 	if m.state == StateInteractive {
 		hint := descStyle.Render("ctrl+q") + sepStyle.Render(" exit interactive")
@@ -229,79 +263,116 @@ func (m *Menu) String() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredHint)
 	}
 
-	var s strings.Builder
-
 	// Track option positions for click detection.
 	m.optionPositions = nil
-	cursor := 0
 
-	for i, k := range m.options {
-		binding := keys.GlobalkeyBindings[k]
+	// Determine effective groups. If none defined, treat all items as one group.
+	effectiveGroups := m.groups
+	if len(effectiveGroups) == 0 {
+		effectiveGroups = []menuGroup{{0, len(m.options)}}
+	}
 
-		var (
-			localActionStyle = actionGroupStyle
-			localKeyStyle    = keyStyle
-			localDescStyle   = descStyle
-		)
-		if m.keyDown == k {
-			localActionStyle = localActionStyle.Underline(true)
-			localKeyStyle = localKeyStyle.Underline(true)
-			localDescStyle = localDescStyle.Underline(true)
-		}
-
-		var inActionGroup bool
-		switch m.state {
-		case StateEmpty:
-			inActionGroup = i <= 1
-		default:
-			if m.actionGroupIdx >= 0 && m.actionGroupIdx < len(m.groups) {
-				ag := m.groups[m.actionGroupIdx]
-				inActionGroup = i >= ag.start && i < ag.end
+	// Render each group as a segment with its styled text and plain-text width.
+	type groupSegment struct {
+		text  string
+		width int
+	}
+	segments := make([]groupSegment, len(effectiveGroups))
+	for gi, g := range effectiveGroups {
+		var text string
+		width := 0
+		for i := g.start; i < g.end; i++ {
+			itemText, itemWidth := m.renderItem(i, m.options[i])
+			text += itemText
+			width += itemWidth
+			if i < g.end-1 {
+				text += sepStyle.Render(separator)
+				width += len(separator)
 			}
 		}
+		segments[gi] = groupSegment{text: text, width: width}
+	}
 
-		startPos := cursor
-		if inActionGroup {
-			s.WriteString(localActionStyle.Render(binding.Help().Key))
-			cursor += len(binding.Help().Key)
-			s.WriteString(" ")
-			cursor++
-			s.WriteString(localActionStyle.Render(binding.Help().Desc))
-			cursor += len(binding.Help().Desc)
-		} else {
-			s.WriteString(localKeyStyle.Render(binding.Help().Key))
-			cursor += len(binding.Help().Key)
-			s.WriteString(" ")
-			cursor++
-			s.WriteString(localDescStyle.Render(binding.Help().Desc))
-			cursor += len(binding.Help().Desc)
-		}
-		m.optionPositions = append(m.optionPositions, optionPosition{
-			startX: startPos,
-			endX:   cursor,
-			key:    k,
-		})
-
-		// Add appropriate separator
-		if i != len(m.options)-1 {
-			isGroupEnd := false
-			for _, group := range m.groups {
-				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
-					cursor += len(verticalSeparator)
-					isGroupEnd = true
-					break
-				}
-			}
-			if !isGroupEnd {
-				s.WriteString(sepStyle.Render(separator))
-				cursor += len(separator)
-			}
+	// Calculate total single-line width.
+	vertSepWidth := len(verticalSeparator)
+	totalWidth := 0
+	for i, seg := range segments {
+		totalWidth += seg.width
+		if i < len(segments)-1 {
+			totalWidth += vertSepWidth
 		}
 	}
 
-	centeredMenuText := menuStyle.Render(s.String())
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
+	// Single-line case: fits or only one group.
+	if totalWidth <= m.width || len(segments) <= 1 {
+		var s strings.Builder
+		cursor := 0
+		for gi, g := range effectiveGroups {
+			for i := g.start; i < g.end; i++ {
+				k := m.options[i]
+				itemText, itemWidth := m.renderItem(i, k)
+
+				startPos := cursor
+				s.WriteString(itemText)
+				cursor += itemWidth
+
+				m.optionPositions = append(m.optionPositions, optionPosition{
+					startX: startPos,
+					endX:   cursor,
+					key:    k,
+				})
+
+				if i < g.end-1 {
+					s.WriteString(sepStyle.Render(separator))
+					cursor += len(separator)
+				}
+			}
+			if gi < len(segments)-1 {
+				s.WriteString(sepStyle.Render(verticalSeparator))
+				cursor += vertSepWidth
+			}
+		}
+
+		centeredMenuText := menuStyle.Render(s.String())
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
+	}
+
+	// Multi-line case: greedily fill rows at group boundaries.
+	type row struct {
+		text  string
+		width int
+	}
+	var rows []row
+	var currentText string
+	currentWidth := 0
+	for i, seg := range segments {
+		needWidth := seg.width
+		if currentWidth > 0 {
+			needWidth += vertSepWidth
+		}
+		if currentWidth > 0 && currentWidth+needWidth > m.width {
+			rows = append(rows, row{text: currentText, width: currentWidth})
+			currentText = ""
+			currentWidth = 0
+		}
+		if currentWidth > 0 {
+			currentText += sepStyle.Render(verticalSeparator)
+			currentWidth += vertSepWidth
+		}
+		currentText += segments[i].text
+		currentWidth += seg.width
+	}
+	if currentWidth > 0 {
+		rows = append(rows, row{text: currentText, width: currentWidth})
+	}
+
+	renderedRows := make([]string, len(rows))
+	for i, r := range rows {
+		renderedRows[i] = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, menuStyle.Render(r.text))
+	}
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		lipgloss.JoinVertical(lipgloss.Left, renderedRows...))
 }
 
 // OptionAtX returns the key name for the menu option at the given X
