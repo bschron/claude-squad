@@ -56,6 +56,8 @@ const (
 	stateNotes
 	// stateProjectPicker is the state when the project picker is displayed.
 	stateProjectPicker
+	// stateProjectSelector is the state when the single-select project dialog is displayed.
+	stateProjectSelector
 )
 
 // layoutBounds tracks the screen rectangles of each panel for mouse hit testing.
@@ -132,6 +134,10 @@ type home struct {
 	projectPicker *overlay.ProjectPicker
 	// selectedProjects stores additional project paths (from config)
 	selectedProjects []string
+	// projectSelector displays the single-select project dialog for new instances
+	projectSelector *overlay.ProjectSelectorOverlay
+	// pendingNewInstancePromptMode tracks whether the pending new instance should enter prompt mode
+	pendingNewInstancePromptMode bool
 }
 
 func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
@@ -624,6 +630,67 @@ func (m *home) applyProjectSelection(paths []string) {
 	m.kanban.UpdateInstances(m.list.GetInstances(), m.list.GetSelectedInstance())
 }
 
+// openProjectSelector shows a single-select project dialog before creating a new instance.
+func (m *home) openProjectSelector(promptMode bool) (tea.Model, tea.Cmd) {
+	var items []overlay.ProjectSelectorItem
+	// Current project first
+	items = append(items, overlay.ProjectSelectorItem{
+		RepoPath:    m.projectDir,
+		DisplayName: filepath.Base(m.projectDir),
+		IsCurrent:   true,
+	})
+	for _, p := range m.selectedProjects {
+		items = append(items, overlay.ProjectSelectorItem{
+			RepoPath:    p,
+			DisplayName: filepath.Base(p),
+		})
+	}
+
+	m.projectSelector = overlay.NewProjectSelectorOverlay(items)
+	m.projectSelector.SetWidth(int(float32(m.bounds.preview.Width+m.bounds.list.Width+m.bounds.kanban.Width) * 0.5))
+	m.pendingNewInstancePromptMode = promptMode
+	m.state = stateProjectSelector
+	return m, nil
+}
+
+// handleProjectSelectorConfirm creates a new instance in the selected project.
+func (m *home) handleProjectSelectorConfirm(selectedPath string) (tea.Model, tea.Cmd) {
+	return m.createNewInstance(selectedPath, m.pendingNewInstancePromptMode)
+}
+
+// createNewInstance creates a new instance at the given path, optionally entering prompt mode after naming.
+func (m *home) createNewInstance(path string, promptMode bool) (tea.Model, tea.Cmd) {
+	var fetchCmd tea.Cmd
+	if promptMode {
+		// Start a background fetch so branches are up to date by the time the picker opens
+		fetchPath := path
+		fetchCmd = func() tea.Msg {
+			git.FetchBranches(fetchPath)
+			return nil
+		}
+	}
+
+	instance, err := session.NewInstance(session.InstanceOptions{
+		Title:   "",
+		Path:    path,
+		Program: m.program,
+	})
+	if err != nil {
+		return m, m.handleError(err)
+	}
+
+	m.newInstanceFinalizer = m.list.AddInstance(instance)
+	m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+	m.state = stateNew
+	m.menu.SetState(ui.StateNewInstance)
+	m.promptAfterName = promptMode
+
+	if fetchCmd != nil {
+		return m, fetchCmd
+	}
+	return m, nil
+}
+
 // handleInteractiveState handles key events in interactive mode, forwarding them to the tmux session.
 func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Ctrl+Q exits interactive mode
@@ -748,7 +815,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive || m.state == stateNotes || m.state == stateProjectPicker {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive || m.state == stateNotes || m.state == stateProjectPicker || m.state == stateProjectSelector {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -792,6 +859,21 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.applyProjectSelection(m.projectPicker.GetSelectedPaths())
 			}
 			m.projectPicker = nil
+			m.state = stateDefault
+		}
+		return m, nil
+	}
+
+	if m.state == stateProjectSelector {
+		shouldClose, confirmed := m.projectSelector.HandleKeyPress(msg)
+		if shouldClose {
+			if confirmed {
+				selectedPath := m.projectSelector.GetSelectedPath()
+				m.projectSelector = nil
+				return m.handleProjectSelectorConfirm(selectedPath)
+			}
+			m.projectSelector = nil
+			m.pendingNewInstancePromptMode = false
 			m.state = stateDefault
 		}
 		return m, nil
@@ -1065,49 +1147,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				fmt.Errorf("you can't create more than %d instances", m.projectConfig.GetInstanceLimit()))
 		}
 
-		// Start a background fetch so branches are up to date by the time the picker opens
-		fetchCmd := func() tea.Msg {
-			currentDir, _ := os.Getwd()
-			git.FetchBranches(currentDir)
-			return nil
+		// If multiple projects are selected, show project selector first
+		if len(m.selectedProjects) > 0 {
+			return m.openProjectSelector(true)
 		}
 
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
-		if err != nil {
-			return m, m.handleError(err)
-		}
-
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-		m.promptAfterName = true
-
-		return m, fetchCmd
+		return m.createNewInstance(".", true)
 	case keys.KeyNew:
 		if m.list.NumInstances() >= m.projectConfig.GetInstanceLimit() {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", m.projectConfig.GetInstanceLimit()))
 		}
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
-		if err != nil {
-			return m, m.handleError(err)
+		// If multiple projects are selected, show project selector first
+		if len(m.selectedProjects) > 0 {
+			return m.openProjectSelector(false)
 		}
 
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-
-		return m, nil
+		return m.createNewInstance(".", false)
 	case keys.KeyUp:
 		if m.kanbanVisible {
 			m.kanban.CursorUp()
@@ -1456,10 +1512,19 @@ func (m *home) scheduleBranchSearch(filter string, version uint64) tea.Cmd {
 }
 
 // runBranchSearch returns a tea.Cmd that performs the git search in the background.
+// It uses the current instance's path so branch search works for cross-project sessions.
 func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
+	// Use the new instance's path if available, otherwise fall back to cwd
+	searchDir := ""
+	if instances := m.list.GetInstances(); len(instances) > 0 {
+		latest := instances[len(instances)-1]
+		searchDir = latest.Path
+	}
+	if searchDir == "" {
+		searchDir, _ = os.Getwd()
+	}
 	return func() tea.Msg {
-		currentDir, _ := os.Getwd()
-		branches, err := git.SearchBranches(currentDir, filter)
+		branches, err := git.SearchBranches(searchDir, filter)
 		if err != nil {
 			log.WarningLog.Printf("branch search failed: %v", err)
 			return nil
@@ -1655,6 +1720,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("project picker overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.projectPicker.Render(), mainView, true, true)
+	} else if m.state == stateProjectSelector {
+		if m.projectSelector == nil {
+			log.ErrorLog.Printf("project selector overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.projectSelector.Render(), mainView, true, true)
 	}
 
 	return mainView

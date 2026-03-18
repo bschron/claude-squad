@@ -131,6 +131,10 @@ func (m *Menu) SetActiveTab(tab int) {
 
 // updateOptions updates the menu options based on current state and instance
 func (m *Menu) updateOptions() {
+	// Reset groups upfront; addInstanceOptions() will set them when appropriate.
+	m.groups = nil
+	m.actionGroupIdx = -1
+
 	switch m.state {
 	case StateEmpty:
 		m.options = defaultMenuOptions
