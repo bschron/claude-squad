@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -53,6 +54,8 @@ const (
 	stateInteractive
 	// stateNotes is the state when user is editing a session note.
 	stateNotes
+	// stateProjectPicker is the state when the project picker is displayed.
+	stateProjectPicker
 )
 
 // layoutBounds tracks the screen rectangles of each panel for mouse hit testing.
@@ -125,6 +128,10 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 	// projectConfig stores per-project configuration (e.g. default effort level)
 	projectConfig *config.ProjectConfig
+	// projectPicker displays the project picker overlay
+	projectPicker *overlay.ProjectPicker
+	// selectedProjects stores additional project paths (from config)
+	selectedProjects []string
 }
 
 func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
@@ -169,8 +176,17 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 	h.kanban = ui.NewKanbanBoard(&h.spinner)
 	h.list = ui.NewList(&h.spinner, autoYes)
 
-	// Load saved instances filtered by current project
-	instances, err := storage.LoadInstancesForProject(gitRepoRoot)
+	// Load selected projects from config
+	h.selectedProjects = projectConfig.GetSelectedProjects()
+
+	// Load saved instances (multi-project or single-project)
+	var instances []*session.Instance
+	if len(h.selectedProjects) > 0 {
+		allPaths := append([]string{gitRepoRoot}, h.selectedProjects...)
+		instances, err = storage.LoadInstancesForProjects(allPaths)
+	} else {
+		instances, err = storage.LoadInstancesForProject(gitRepoRoot)
+	}
 	if err != nil {
 		fmt.Printf("Failed to load instances: %v\n", err)
 		os.Exit(1)
@@ -185,11 +201,16 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 		}
 	}
 
-	// Discover Claude Code worktrees
-	discovered, err := session.DiscoverClaudeWorktrees(projectDir)
-	if err == nil {
+	// Discover Claude Code worktrees (for current and selected projects)
+	projectsToDiscover := []string{projectDir}
+	projectsToDiscover = append(projectsToDiscover, h.selectedProjects...)
+	for _, projDir := range projectsToDiscover {
+		discovered, err := session.DiscoverClaudeWorktrees(projDir)
+		if err != nil {
+			log.ErrorLog.Printf("Failed to discover Claude Code worktrees in %s: %v", projDir, err)
+			continue
+		}
 		for _, ds := range discovered {
-			// Skip if an instance with the same title already exists
 			if h.hasInstanceWithTitle(ds.WorktreeName) {
 				continue
 			}
@@ -200,8 +221,11 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 			}
 			h.list.AddInstance(extInstance)()
 		}
-	} else {
-		log.ErrorLog.Printf("Failed to discover Claude Code worktrees: %v", err)
+	}
+
+	// Set up multi-project grouping if projects are selected
+	if len(h.selectedProjects) > 0 {
+		h.list.SetProjectGroups(gitRepoRoot, append([]string{gitRepoRoot}, h.selectedProjects...))
 	}
 
 	return h
@@ -400,7 +424,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save after successful start
-		if err := m.storage.SaveInstancesForProject(m.projectDir, m.list.GetInstances()); err != nil {
+		if err := m.saveAllInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 		if m.autoYes {
@@ -440,10 +464,161 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
-	if err := m.storage.SaveInstancesForProject(m.projectDir, m.list.GetInstances()); err != nil {
+	if err := m.saveAllInstances(); err != nil {
 		return m, m.handleError(err)
 	}
 	return m, tea.Quit
+}
+
+// saveAllInstances saves instances, grouping by project in multi-project mode.
+func (m *home) saveAllInstances() error {
+	if len(m.selectedProjects) == 0 {
+		return m.storage.SaveInstancesForProject(m.projectDir, m.list.GetInstances())
+	}
+	// Group instances by RepoPath and save each group
+	groups := make(map[string][]*session.Instance)
+	for _, inst := range m.list.GetInstances() {
+		rp := inst.ToInstanceData().Worktree.RepoPath
+		if rp == "" {
+			rp = m.projectDir
+		}
+		groups[rp] = append(groups[rp], inst)
+	}
+	for rp, insts := range groups {
+		if err := m.storage.SaveInstancesForProject(rp, insts); err != nil {
+			return err
+		}
+	}
+	// Save empty lists for selected projects that have no instances remaining
+	allPaths := append([]string{m.projectDir}, m.selectedProjects...)
+	for _, rp := range allPaths {
+		if _, ok := groups[rp]; !ok {
+			if err := m.storage.SaveInstancesForProject(rp, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// openProjectPicker opens the project picker overlay.
+func (m *home) openProjectPicker() (tea.Model, tea.Cmd) {
+	projects, err := session.DiscoverAllProjects(m.storage)
+	if err != nil {
+		return m, m.handleError(fmt.Errorf("failed to discover projects: %w", err))
+	}
+
+	// Build selected set from current config
+	selectedSet := make(map[string]bool)
+	for _, p := range m.selectedProjects {
+		selectedSet[p] = true
+	}
+
+	var items []overlay.ProjectPickerItem
+	// Ensure current project is first
+	currentFound := false
+	for _, p := range projects {
+		if p.RepoPath == m.projectDir {
+			items = append([]overlay.ProjectPickerItem{{
+				RepoPath:     p.RepoPath,
+				DisplayName:  p.DisplayName,
+				SessionCount: p.SessionCount,
+				IsCurrent:    true,
+				Selected:     true,
+			}}, items...)
+			currentFound = true
+		} else {
+			items = append(items, overlay.ProjectPickerItem{
+				RepoPath:     p.RepoPath,
+				DisplayName:  p.DisplayName,
+				SessionCount: p.SessionCount,
+				IsCurrent:    false,
+				Selected:     selectedSet[p.RepoPath],
+			})
+		}
+	}
+	// If current project wasn't in discovered projects (no sessions yet), add it
+	if !currentFound {
+		items = append([]overlay.ProjectPickerItem{{
+			RepoPath:     m.projectDir,
+			DisplayName:  filepath.Base(m.projectDir),
+			SessionCount: 0,
+			IsCurrent:    true,
+			Selected:     true,
+		}}, items...)
+	}
+
+	m.projectPicker = overlay.NewProjectPicker(items)
+	m.projectPicker.SetWidth(int(float32(m.bounds.preview.Width+m.bounds.list.Width+m.bounds.kanban.Width) * 0.5))
+	m.state = stateProjectPicker
+	return m, nil
+}
+
+// applyProjectSelection updates state after user confirms project selection.
+func (m *home) applyProjectSelection(paths []string) {
+	m.selectedProjects = paths
+	m.projectConfig.SelectedProjects = paths
+	if err := config.SaveProjectConfig(m.projectDir, m.projectConfig); err != nil {
+		log.WarningLog.Printf("Failed to save project config: %v", err)
+	}
+
+	// Rebuild instance list
+	m.list = ui.NewList(&m.spinner, m.autoYes)
+
+	var instances []*session.Instance
+	var err error
+	if len(m.selectedProjects) > 0 {
+		allPaths := append([]string{m.projectDir}, m.selectedProjects...)
+		instances, err = m.storage.LoadInstancesForProjects(allPaths)
+	} else {
+		instances, err = m.storage.LoadInstancesForProject(m.projectDir)
+	}
+	if err != nil {
+		log.ErrorLog.Printf("Failed to reload instances: %v", err)
+		return
+	}
+
+	for _, instance := range instances {
+		m.list.AddInstance(instance)()
+		if m.autoYes {
+			instance.AutoYes = true
+		}
+	}
+
+	// Re-discover worktrees for all selected projects
+	projectsToDiscover := []string{m.projectDir}
+	projectsToDiscover = append(projectsToDiscover, m.selectedProjects...)
+	for _, projDir := range projectsToDiscover {
+		discovered, err := session.DiscoverClaudeWorktrees(projDir)
+		if err != nil {
+			log.ErrorLog.Printf("Failed to discover Claude Code worktrees in %s: %v", projDir, err)
+			continue
+		}
+		for _, ds := range discovered {
+			if m.hasInstanceWithTitle(ds.WorktreeName) {
+				continue
+			}
+			extInstance, err := session.NewExternalInstance(ds)
+			if err != nil {
+				log.ErrorLog.Printf("Failed to create external instance %s: %v", ds.WorktreeName, err)
+				continue
+			}
+			m.list.AddInstance(extInstance)()
+		}
+	}
+
+	// Set up project grouping
+	if len(m.selectedProjects) > 0 {
+		m.list.SetProjectGroups(m.projectDir, append([]string{m.projectDir}, m.selectedProjects...))
+	} else {
+		m.list.ClearProjectGroups()
+	}
+
+	// Resize list to current dimensions
+	m.list.SetSize(m.bounds.list.Width, m.bounds.list.Height)
+
+	// Update kanban
+	m.kanban.UpdateInstances(m.list.GetInstances(), m.list.GetSelectedInstance())
 }
 
 // handleInteractiveState handles key events in interactive mode, forwarding them to the tmux session.
@@ -564,7 +739,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive || m.state == stateNotes {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateInteractive || m.state == stateNotes || m.state == stateProjectPicker {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -599,6 +774,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
+	}
+
+	if m.state == stateProjectPicker {
+		shouldClose, confirmed := m.projectPicker.HandleKeyPress(msg)
+		if shouldClose {
+			if confirmed {
+				m.applyProjectSelection(m.projectPicker.GetSelectedPaths())
+			}
+			m.projectPicker = nil
+			m.state = stateDefault
+		}
+		return m, nil
 	}
 
 	if m.state == stateInteractive {
@@ -859,6 +1046,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
+	case keys.KeyProjectPicker:
+		return m.openProjectPicker()
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= m.projectConfig.GetInstanceLimit() {
 			return m, m.handleError(
@@ -1441,6 +1630,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateProjectPicker {
+		if m.projectPicker == nil {
+			log.ErrorLog.Printf("project picker overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.projectPicker.Render(), mainView, true, true)
 	}
 
 	return mainView

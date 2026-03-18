@@ -5,6 +5,7 @@ import (
 	"claude-squad/session"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -73,6 +74,10 @@ type List struct {
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
 	repos map[string]int
+
+	// Multi-project grouping
+	projectGroups  []string // ordered repo paths (current first). empty = single-project mode
+	currentProject string
 }
 
 func NewList(spinner *spinner.Model, autoYes bool) *List {
@@ -82,6 +87,30 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		repos:    make(map[string]int),
 		autoyes:  autoYes,
 	}
+}
+
+// SetProjectGroups enables multi-project grouping mode.
+func (l *List) SetProjectGroups(currentProject string, projects []string) {
+	l.currentProject = currentProject
+	l.projectGroups = projects
+}
+
+// ClearProjectGroups disables multi-project grouping mode.
+func (l *List) ClearProjectGroups() {
+	l.currentProject = ""
+	l.projectGroups = nil
+}
+
+// IsMultiProject returns true if the list is in multi-project mode.
+func (l *List) IsMultiProject() bool {
+	return len(l.projectGroups) > 1
+}
+
+type projectGroup struct {
+	repoPath    string
+	displayName string
+	isCurrent   bool
+	statuses    []statusGroup
 }
 
 // buildDisplayOrder groups items by status and returns the groups and a flat display order.
@@ -107,6 +136,60 @@ func (l *List) buildDisplayOrder() []statusGroup {
 		l.displayOrder = append(l.displayOrder, g.indices...)
 	}
 	return buckets
+}
+
+// buildProjectDisplayOrder groups items by project first, then by status within each.
+func (l *List) buildProjectDisplayOrder() []projectGroup {
+	// Map items to their project
+	projectItems := make(map[string][]int)
+	for i, item := range l.items {
+		rp := item.ToInstanceData().Worktree.RepoPath
+		if rp == "" {
+			rp = l.currentProject
+		}
+		projectItems[rp] = append(projectItems[rp], i)
+	}
+
+	var groups []projectGroup
+	for _, rp := range l.projectGroups {
+		items, ok := projectItems[rp]
+		if !ok {
+			continue
+		}
+
+		buckets := []statusGroup{
+			{label: "RUNNING"},
+			{label: "IDLE"},
+			{label: "COMPLETED"},
+		}
+		for _, idx := range items {
+			switch l.items[idx].Status {
+			case session.Running, session.Loading:
+				buckets[0].indices = append(buckets[0].indices, idx)
+			case session.Ready:
+				buckets[1].indices = append(buckets[1].indices, idx)
+			case session.Paused:
+				buckets[2].indices = append(buckets[2].indices, idx)
+			}
+		}
+
+		groups = append(groups, projectGroup{
+			repoPath:    rp,
+			displayName: filepath.Base(rp),
+			isCurrent:   rp == l.currentProject,
+			statuses:    buckets,
+		})
+	}
+
+	// Build flat display order
+	l.displayOrder = nil
+	for _, pg := range groups {
+		for _, sg := range pg.statuses {
+			l.displayOrder = append(l.displayOrder, sg.indices...)
+		}
+	}
+
+	return groups
 }
 
 // SetSize sets the height and width of the list.
@@ -287,19 +370,30 @@ func (l *List) String() string {
 	b.WriteString("\n")
 	b.WriteString("\n")
 
-	// Build grouped display order.
+	dividerWidth := AdjustPreviewWidth(l.width) + 2
+
+	if l.IsMultiProject() {
+		l.renderMultiProject(&b, dividerWidth)
+	} else {
+		l.renderSingleProject(&b, dividerWidth)
+	}
+
+	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+}
+
+var projectHeaderStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"})
+
+func (l *List) renderSingleProject(b *strings.Builder, dividerWidth int) {
 	groups := l.buildDisplayOrder()
 	displayNum := 1
 	firstGroup := true
-	dividerWidth := AdjustPreviewWidth(l.width) + 2
 
 	for _, g := range groups {
 		if len(g.indices) == 0 {
 			continue
 		}
-		// Render labeled divider for every group.
-		// First group: just the label line + \n (2 lines).
-		// Subsequent groups: \n + label line + \n (3 lines, extra spacing).
 		label := fmt.Sprintf(" ── %s ", g.label)
 		line := label + strings.Repeat("─", max(0, dividerWidth-runewidth.StringWidth(label)))
 		if !firstGroup {
@@ -318,7 +412,62 @@ func (l *List) String() string {
 			}
 		}
 	}
-	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+}
+
+func (l *List) renderMultiProject(b *strings.Builder, dividerWidth int) {
+	projGroups := l.buildProjectDisplayOrder()
+	displayNum := 1
+	firstProject := true
+
+	for _, pg := range projGroups {
+		// Count items in this project
+		total := 0
+		for _, sg := range pg.statuses {
+			total += len(sg.indices)
+		}
+		if total == 0 {
+			continue
+		}
+
+		// Project header
+		if !firstProject {
+			b.WriteString("\n")
+		}
+		headerLabel := pg.displayName
+		if pg.isCurrent {
+			headerLabel += " (current)"
+		}
+		header := fmt.Sprintf(" ━━ %s ", headerLabel)
+		line := header + strings.Repeat("━", max(0, dividerWidth-runewidth.StringWidth(header)))
+		b.WriteString(projectHeaderStyle.Render(line))
+		b.WriteString("\n")
+		firstProject = false
+
+		// Status groups within this project
+		firstGroup := true
+		for _, sg := range pg.statuses {
+			if len(sg.indices) == 0 {
+				continue
+			}
+			label := fmt.Sprintf(" ── %s ", sg.label)
+			sline := label + strings.Repeat("─", max(0, dividerWidth-runewidth.StringWidth(label)))
+			if !firstGroup {
+				b.WriteString("\n")
+			}
+			b.WriteString(dividerStyle.Render(sline))
+			b.WriteString("\n")
+			firstGroup = false
+
+			for j, itemIdx := range sg.indices {
+				item := l.items[itemIdx]
+				b.WriteString(l.renderer.Render(item, displayNum, itemIdx == l.selectedIdx, len(l.repos) > 1))
+				displayNum++
+				if j != len(sg.indices)-1 {
+					b.WriteString("\n\n")
+				}
+			}
+		}
+	}
 }
 
 // Down selects the next item in the list.
@@ -479,6 +628,11 @@ func (l *List) IndexAtY(localY int) int {
 	const itemGap = 2
 	const firstDividerLines = 2 // label line + \n
 	const dividerLines = 3     // \n + label line + \n
+	const projectHeaderLines = 2 // project header + \n
+
+	if l.IsMultiProject() {
+		return l.indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines)
+	}
 
 	// Build groups to walk through the layout
 	groups := l.buildDisplayOrder()
@@ -493,7 +647,6 @@ func (l *List) IndexAtY(localY int) int {
 		if len(g.indices) == 0 {
 			continue
 		}
-		// Every group has a label header
 		if firstGroup {
 			y -= firstDividerLines
 		} else {
@@ -509,12 +662,71 @@ func (l *List) IndexAtY(localY int) int {
 				return itemIdx
 			}
 			y -= itemHeight
-			// Gap between items within same group (not after last item in group)
 			if j < len(g.indices)-1 {
 				if y < itemGap {
 					return -1
 				}
 				y -= itemGap
+			}
+		}
+	}
+	return -1
+}
+
+func (l *List) indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines int) int {
+	projGroups := l.buildProjectDisplayOrder()
+
+	y := localY - headerLines
+	if y < 0 {
+		return -1
+	}
+
+	firstProject := true
+	for _, pg := range projGroups {
+		total := 0
+		for _, sg := range pg.statuses {
+			total += len(sg.indices)
+		}
+		if total == 0 {
+			continue
+		}
+
+		// Project header
+		if !firstProject {
+			y-- // extra \n between projects
+		}
+		y -= projectHeaderLines
+		if y < 0 {
+			return -1
+		}
+		firstProject = false
+
+		firstGroup := true
+		for _, sg := range pg.statuses {
+			if len(sg.indices) == 0 {
+				continue
+			}
+			if firstGroup {
+				y -= firstDividerLines
+			} else {
+				y -= dividerLines
+			}
+			if y < 0 {
+				return -1
+			}
+			firstGroup = false
+
+			for j, itemIdx := range sg.indices {
+				if y < itemHeight {
+					return itemIdx
+				}
+				y -= itemHeight
+				if j < len(sg.indices)-1 {
+					if y < itemGap {
+						return -1
+					}
+					y -= itemGap
+				}
 			}
 		}
 	}

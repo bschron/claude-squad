@@ -138,6 +138,26 @@ func (s *Storage) SaveInstancesForProject(repoPath string, projectInstances []*I
 	return s.SaveInstances(merged)
 }
 
+// LoadInstancesForProjects loads instances filtered by multiple repository paths.
+func (s *Storage) LoadInstancesForProjects(repoPaths []string) ([]*Instance, error) {
+	all, err := s.LoadInstances()
+	if err != nil {
+		return nil, err
+	}
+	pathSet := make(map[string]bool)
+	for _, p := range repoPaths {
+		pathSet[p] = true
+	}
+	var filtered []*Instance
+	for _, inst := range all {
+		rp := inst.ToInstanceData().Worktree.RepoPath
+		if pathSet[rp] || rp == "" {
+			filtered = append(filtered, inst)
+		}
+	}
+	return filtered, nil
+}
+
 // DeleteInstance removes an instance from storage
 func (s *Storage) DeleteInstance(title string) error {
 	instances, err := s.LoadInstances()
