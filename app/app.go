@@ -226,6 +226,7 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 	// Set up multi-project grouping if projects are selected
 	if len(h.selectedProjects) > 0 {
 		h.list.SetProjectGroups(gitRepoRoot, append([]string{gitRepoRoot}, h.selectedProjects...))
+		h.kanban.SetProjectGroups(gitRepoRoot, append([]string{gitRepoRoot}, h.selectedProjects...))
 	}
 
 	return h
@@ -610,8 +611,10 @@ func (m *home) applyProjectSelection(paths []string) {
 	// Set up project grouping
 	if len(m.selectedProjects) > 0 {
 		m.list.SetProjectGroups(m.projectDir, append([]string{m.projectDir}, m.selectedProjects...))
+		m.kanban.SetProjectGroups(m.projectDir, append([]string{m.projectDir}, m.selectedProjects...))
 	} else {
 		m.list.ClearProjectGroups()
+		m.kanban.ClearProjectGroups()
 	}
 
 	// Resize list to current dimensions
