@@ -61,6 +61,7 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("y")+descStyle.Render("         - Copy tmux session name to clipboard"),
 		"",
 		headerStyle.Render("Other:"),
+		keyStyle.Render("P")+descStyle.Render("         - Select projects to view"),
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),

@@ -114,12 +114,24 @@ var SoundDisplayLabels = map[SoundOption]string{
 
 // ProjectConfig represents per-project configuration stored at the git repo root.
 type ProjectConfig struct {
-	DefaultEffort   EffortLevel `json:"default_effort,omitempty"`
-	DefaultModel    ModelOption `json:"default_model,omitempty"`
-	SkipPermissions *bool       `json:"skip_permissions,omitempty"`
-	SoundAlert      *bool       `json:"sound_alert,omitempty"`
-	AlertSound      SoundOption `json:"alert_sound,omitempty"`
-	InstanceLimit   *int        `json:"instance_limit,omitempty"`
+	DefaultEffort    EffortLevel `json:"default_effort,omitempty"`
+	DefaultModel     ModelOption `json:"default_model,omitempty"`
+	SkipPermissions  *bool       `json:"skip_permissions,omitempty"`
+	SoundAlert       *bool       `json:"sound_alert,omitempty"`
+	AlertSound       SoundOption `json:"alert_sound,omitempty"`
+	InstanceLimit    *int        `json:"instance_limit,omitempty"`
+	SelectedProjects []string    `json:"selected_projects,omitempty"`
+}
+
+// GetSelectedProjects returns selected project paths, filtering out non-existent ones.
+func (c *ProjectConfig) GetSelectedProjects() []string {
+	var valid []string
+	for _, p := range c.SelectedProjects {
+		if _, err := os.Stat(p); err == nil {
+			valid = append(valid, p)
+		}
+	}
+	return valid
 }
 
 // GetSkipPermissions returns the effective skip permissions value (nil defaults to true).
