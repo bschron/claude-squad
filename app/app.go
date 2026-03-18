@@ -757,7 +757,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		return nil, false
 	}
 
-	if active := m.getActiveInstance(); active != nil && active.Paused() && name == keys.KeyEnter {
+	if active := m.getActiveInstance(); active != nil && active.Paused() && (name == keys.KeyEnter || name == keys.KeyInteractive) {
 		return nil, false
 	}
 	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
@@ -766,7 +766,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 
 	// Skip the menu highlighting if the key is not in the map or we are using the shift up and down keys.
 	// TODO: cleanup: when you press enter on stateNew, we use keys.KeySubmitName. We should unify the keymap.
-	if name == keys.KeyEnter && m.state == stateNew {
+	if name == keys.KeyInteractive && m.state == stateNew {
 		name = keys.KeySubmitName
 	}
 	m.keySent = true
@@ -1043,7 +1043,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 
 	// Handle quit commands first
-	if msg.String() == "ctrl+c" || msg.String() == "q" {
+	if msg.String() == "ctrl+c" {
 		return m.handleQuit()
 	}
 
@@ -1053,6 +1053,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 
 	switch name {
+	case keys.KeyQuit:
+		return m.handleQuit()
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyProjectPicker:

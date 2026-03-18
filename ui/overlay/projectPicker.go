@@ -78,16 +78,10 @@ func (p *ProjectPicker) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 	}
 
 	switch msg.String() {
-	case "k":
-		p.moveUp()
-	case "j":
-		p.moveDown()
 	case " ":
 		if !p.items[p.cursor].IsCurrent {
 			p.items[p.cursor].Selected = !p.items[p.cursor].Selected
 		}
-	case "q":
-		return true, false
 	}
 
 	return false, false

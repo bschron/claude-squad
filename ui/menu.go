@@ -166,7 +166,7 @@ func (m *Menu) addInstanceOptions() {
 	instanceGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyNotes}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeyInteractive, keys.KeySubmit}
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else if !m.instance.TmuxAlive() {
@@ -224,7 +224,7 @@ func (m *Menu) SetSize(width, height int) {
 
 func (m *Menu) String() string {
 	if m.state == StateInteractive {
-		hint := descStyle.Render("ctrl-q") + sepStyle.Render(" exit interactive")
+		hint := descStyle.Render("ctrl+q") + sepStyle.Render(" exit interactive")
 		centeredHint := menuStyle.Render(hint)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredHint)
 	}

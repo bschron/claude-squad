@@ -54,14 +54,14 @@ func (p *PreviewPane) setFallbackState(message string) {
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	switch {
 	case instance == nil:
-		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
+		p.setFallbackState("No agents running yet. Spin up a new instance with ctrl+n to get started!")
 		return nil
 	case instance.Status == session.Loading:
 		p.setFallbackState("Setting up workspace...")
 		return nil
 	case instance.Status == session.Paused:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
-			"Session is paused. Press 'r' to resume.",
+			"Session is paused. Press ctrl+r to resume.",
 			"",
 			lipgloss.NewStyle().
 				Foreground(lipgloss.AdaptiveColor{
@@ -191,7 +191,7 @@ func (p *PreviewPane) String() string {
 		footer := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00FF00")).
 			Bold(true).
-			Render("INTERACTIVE (ctrl-q to exit)")
+			Render("INTERACTIVE (ctrl+q to exit)")
 		lines = append(lines, footer)
 	}
 
