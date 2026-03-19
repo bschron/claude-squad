@@ -495,17 +495,18 @@ func (l *List) renderMultiProject(b *strings.Builder, dividerWidth int) {
 	}
 }
 
-// computeItemY returns the start and end Y positions (relative to items area start,
-// not including the 5-line header) for the item at the given index.
+// computeItemY returns the start and end Y positions in the items area
+// (the portion of content after the 5-line header split) for the given item index.
+// These positions match the actual string lines in the items area, where:
+//   - The first divider/project-header is absorbed into the kept header (split[4])
+//   - Items start immediately (single-project) or after 1 divider line (multi-project)
+//   - Between-group dividers are 1 line, between-item gaps are 1 line
 func (l *List) computeItemY(targetIdx int) (startY, endY int) {
 	const itemHeight = 4
-	const itemGap = 2
-	const firstDividerLines = 2
-	const dividerLines = 3
-	const projectHeaderLines = 2
+	const itemGapLines = 1
 
 	if l.IsMultiProject() {
-		return l.computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines)
+		return l.computeItemYMultiProject(targetIdx)
 	}
 
 	groups := l.buildDisplayOrder()
@@ -516,11 +517,10 @@ func (l *List) computeItemY(targetIdx int) (startY, endY int) {
 		if len(g.indices) == 0 {
 			continue
 		}
-		if firstGroup {
-			y += firstDividerLines
-		} else {
-			y += dividerLines
+		if !firstGroup {
+			y++ // divider line between groups (1 line in items area)
 		}
+		// First group: 0 overhead (divider absorbed into header at split[4])
 		firstGroup = false
 
 		for j, itemIdx := range g.indices {
@@ -529,14 +529,17 @@ func (l *List) computeItemY(targetIdx int) (startY, endY int) {
 			}
 			y += itemHeight
 			if j < len(g.indices)-1 {
-				y += itemGap
+				y += itemGapLines
 			}
 		}
 	}
 	return 0, 0
 }
 
-func (l *List) computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines int) (startY, endY int) {
+func (l *List) computeItemYMultiProject(targetIdx int) (startY, endY int) {
+	const itemHeight = 4
+	const itemGapLines = 1
+
 	projGroups := l.buildProjectDisplayOrder()
 	y := 0
 	firstProject := true
@@ -550,21 +553,17 @@ func (l *List) computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDiv
 			continue
 		}
 
-		if !firstProject {
-			y++ // extra \n between projects
-		}
-		y += projectHeaderLines
-		firstProject = false
-
 		firstGroup := true
 		for _, sg := range pg.statuses {
 			if len(sg.indices) == 0 {
 				continue
 			}
-			if firstGroup {
-				y += firstDividerLines
+			if firstGroup && firstProject {
+				y++ // first status divider (project header absorbed into header)
+			} else if firstGroup {
+				y += 2 // project header + status divider
 			} else {
-				y += dividerLines
+				y++ // subsequent status divider within same project
 			}
 			firstGroup = false
 
@@ -574,10 +573,11 @@ func (l *List) computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDiv
 				}
 				y += itemHeight
 				if j < len(sg.indices)-1 {
-					y += itemGap
+					y += itemGapLines
 				}
 			}
 		}
+		firstProject = false
 	}
 	return 0, 0
 }
@@ -800,64 +800,66 @@ func (l *List) IndexAtY(localY int) int {
 	}
 
 	const headerLines = 5
-	const itemHeight = 4
-	const itemGap = 2
-	const firstDividerLines = 2 // label line + \n
-	const dividerLines = 3     // \n + label line + \n
-	const projectHeaderLines = 2 // project header + \n
+	// Convert visual row to items-area line number
+	itemsAreaLine := localY - headerLines + l.scrollOffset
+	return l.itemAtItemsAreaLine(itemsAreaLine)
+}
 
-	if l.IsMultiProject() {
-		return l.indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines)
-	}
-
-	// Build groups to walk through the layout
-	groups := l.buildDisplayOrder()
-
-	y := localY - headerLines + l.scrollOffset
-	if y < 0 {
+// itemAtItemsAreaLine returns the item index at the given line number in the
+// items area (the content after the 5-line header split). Returns -1 if the
+// line falls on a divider, gap, or is out of bounds.
+func (l *List) itemAtItemsAreaLine(line int) int {
+	if line < 0 {
 		return -1
 	}
 
+	const itemHeight = 4
+	const itemGapLines = 1
+
+	if l.IsMultiProject() {
+		return l.itemAtItemsAreaLineMultiProject(line)
+	}
+
+	groups := l.buildDisplayOrder()
+	y := 0
 	firstGroup := true
+
 	for _, g := range groups {
 		if len(g.indices) == 0 {
 			continue
 		}
-		if firstGroup {
-			y -= firstDividerLines
-		} else {
-			y -= dividerLines
-		}
-		if y < 0 {
-			return -1
+		if !firstGroup {
+			if line == y {
+				return -1 // on the divider line
+			}
+			y++ // divider between groups
 		}
 		firstGroup = false
 
 		for j, itemIdx := range g.indices {
-			if y < itemHeight {
+			if line < y+itemHeight {
 				return itemIdx
 			}
-			y -= itemHeight
+			y += itemHeight
 			if j < len(g.indices)-1 {
-				if y < itemGap {
-					return -1
+				if line == y {
+					return -1 // on the gap line
 				}
-				y -= itemGap
+				y += itemGapLines
 			}
 		}
 	}
 	return -1
 }
 
-func (l *List) indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines int) int {
+func (l *List) itemAtItemsAreaLineMultiProject(line int) int {
+	const itemHeight = 4
+	const itemGapLines = 1
+
 	projGroups := l.buildProjectDisplayOrder()
-
-	y := localY - headerLines + l.scrollOffset
-	if y < 0 {
-		return -1
-	}
-
+	y := 0
 	firstProject := true
+
 	for _, pg := range projGroups {
 		total := 0
 		for _, sg := range pg.statuses {
@@ -867,44 +869,39 @@ func (l *List) indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, fi
 			continue
 		}
 
-		// Project header
-		if !firstProject {
-			y-- // extra \n between projects
-		}
-		y -= projectHeaderLines
-		if y < 0 {
-			return -1
-		}
-		firstProject = false
-
 		firstGroup := true
 		for _, sg := range pg.statuses {
 			if len(sg.indices) == 0 {
 				continue
 			}
-			if firstGroup {
-				y -= firstDividerLines
+			var overhead int
+			if firstGroup && firstProject {
+				overhead = 1 // first status divider (project header absorbed)
+			} else if firstGroup {
+				overhead = 2 // project header + status divider
 			} else {
-				y -= dividerLines
+				overhead = 1 // subsequent status divider
 			}
-			if y < 0 {
-				return -1
+			if line < y+overhead {
+				return -1 // on header/divider lines
 			}
+			y += overhead
 			firstGroup = false
 
 			for j, itemIdx := range sg.indices {
-				if y < itemHeight {
+				if line < y+itemHeight {
 					return itemIdx
 				}
-				y -= itemHeight
+				y += itemHeight
 				if j < len(sg.indices)-1 {
-					if y < itemGap {
-						return -1
+					if line == y {
+						return -1 // on the gap line
 					}
-					y -= itemGap
+					y += itemGapLines
 				}
 			}
 		}
+		firstProject = false
 	}
 	return -1
 }

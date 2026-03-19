@@ -24,14 +24,13 @@ func TestList_IndexAtY(t *testing.T) {
 	list.AddInstance(inst2)
 	list.AddInstance(inst3)
 
-	// Layout with group headers:
-	//   y=0..4: header (5 lines)
-	//   y=5..6: RUNNING label (2 lines: label + \n)
-	//   y=7..10: item-1 (Running group, 4 lines)
-	//   y=11..13: IDLE divider (3 lines: \n + label + \n)
-	//   y=14..17: item-2 (Idle group, 4 lines)
-	//   y=18..20: COMPLETED divider (3 lines: \n + label + \n)
-	//   y=21..24: item-3 (Completed group, 4 lines)
+	// Layout with group headers (first divider absorbed into header at split[4]):
+	//   y=0..4: header (5 lines, includes first group divider)
+	//   y=5..8: item-1 (Running group, 4 lines)
+	//   y=9: IDLE divider (1 line)
+	//   y=10..13: item-2 (Idle group, 4 lines)
+	//   y=14: COMPLETED divider (1 line)
+	//   y=15..18: item-3 (Completed group, 4 lines)
 
 	t.Run("header area returns -1", func(t *testing.T) {
 		for y := 0; y < 5; y++ {
@@ -39,38 +38,28 @@ func TestList_IndexAtY(t *testing.T) {
 		}
 	})
 
-	t.Run("first group label returns -1", func(t *testing.T) {
-		for y := 5; y < 7; y++ {
-			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in group label", y)
-		}
-	})
-
 	t.Run("first item area returns 0", func(t *testing.T) {
-		for y := 7; y < 11; y++ {
+		for y := 5; y < 9; y++ {
 			assert.Equal(t, 0, list.IndexAtY(y), "Y=%d should map to item 0", y)
 		}
 	})
 
 	t.Run("divider between running and idle returns -1", func(t *testing.T) {
-		for y := 11; y < 14; y++ {
-			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in divider", y)
-		}
+		assert.Equal(t, -1, list.IndexAtY(9), "Y=9 should be in divider")
 	})
 
 	t.Run("second item area returns 1", func(t *testing.T) {
-		for y := 14; y < 18; y++ {
+		for y := 10; y < 14; y++ {
 			assert.Equal(t, 1, list.IndexAtY(y), "Y=%d should map to item 1", y)
 		}
 	})
 
 	t.Run("divider between idle and completed returns -1", func(t *testing.T) {
-		for y := 18; y < 21; y++ {
-			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in divider", y)
-		}
+		assert.Equal(t, -1, list.IndexAtY(14), "Y=14 should be in divider")
 	})
 
 	t.Run("third item area returns 2", func(t *testing.T) {
-		for y := 21; y < 25; y++ {
+		for y := 15; y < 19; y++ {
 			assert.Equal(t, 2, list.IndexAtY(y), "Y=%d should map to item 2", y)
 		}
 	})
@@ -95,27 +84,24 @@ func TestList_IndexAtY_SameStatusGroup(t *testing.T) {
 	list.AddInstance(inst1)
 	list.AddInstance(inst2)
 
-	// Layout:
-	//   y=0..4: header
-	//   y=5..6: RUNNING label (2 lines)
-	//   y=7..10: run-1 (4 lines)
-	//   y=11..12: gap (2 lines, normal within-group gap)
-	//   y=13..16: run-2 (4 lines)
+	// Layout (first divider absorbed into header at split[4]):
+	//   y=0..4: header (includes RUNNING label)
+	//   y=5..8: run-1 (4 lines)
+	//   y=9: gap (1 line)
+	//   y=10..13: run-2 (4 lines)
 
 	t.Run("first item", func(t *testing.T) {
-		for y := 7; y < 11; y++ {
+		for y := 5; y < 9; y++ {
 			assert.Equal(t, 0, list.IndexAtY(y), "Y=%d should map to item 0", y)
 		}
 	})
 
 	t.Run("gap within group returns -1", func(t *testing.T) {
-		for y := 11; y < 13; y++ {
-			assert.Equal(t, -1, list.IndexAtY(y), "Y=%d should be in gap", y)
-		}
+		assert.Equal(t, -1, list.IndexAtY(9), "Y=9 should be in gap")
 	})
 
 	t.Run("second item", func(t *testing.T) {
-		for y := 13; y < 17; y++ {
+		for y := 10; y < 14; y++ {
 			assert.Equal(t, 1, list.IndexAtY(y), "Y=%d should map to item 1", y)
 		}
 	})
