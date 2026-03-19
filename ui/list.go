@@ -66,6 +66,7 @@ type statusGroup struct {
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
+	scrollOffset  int // lines to skip in items area for scrolling
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
@@ -378,7 +379,25 @@ func (l *List) String() string {
 		l.renderSingleProject(&b, dividerWidth)
 	}
 
-	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+	content := b.String()
+
+	// Apply scroll offset: keep header lines, skip scrollOffset lines from items area
+	if l.scrollOffset > 0 {
+		lines := strings.Split(content, "\n")
+		const headerLineCount = 5
+		if len(lines) > headerLineCount {
+			header := lines[:headerLineCount]
+			items := lines[headerLineCount:]
+			if l.scrollOffset < len(items) {
+				items = items[l.scrollOffset:]
+			} else {
+				items = nil
+			}
+			content = strings.Join(append(header, items...), "\n")
+		}
+	}
+
+	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, content)
 }
 
 var projectHeaderStyle = lipgloss.NewStyle().
@@ -470,6 +489,123 @@ func (l *List) renderMultiProject(b *strings.Builder, dividerWidth int) {
 	}
 }
 
+// computeItemY returns the start and end Y positions (relative to items area start,
+// not including the 5-line header) for the item at the given index.
+func (l *List) computeItemY(targetIdx int) (startY, endY int) {
+	const itemHeight = 4
+	const itemGap = 2
+	const firstDividerLines = 2
+	const dividerLines = 3
+	const projectHeaderLines = 2
+
+	if l.IsMultiProject() {
+		return l.computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines)
+	}
+
+	groups := l.buildDisplayOrder()
+	y := 0
+	firstGroup := true
+
+	for _, g := range groups {
+		if len(g.indices) == 0 {
+			continue
+		}
+		if firstGroup {
+			y += firstDividerLines
+		} else {
+			y += dividerLines
+		}
+		firstGroup = false
+
+		for j, itemIdx := range g.indices {
+			if itemIdx == targetIdx {
+				return y, y + itemHeight
+			}
+			y += itemHeight
+			if j < len(g.indices)-1 {
+				y += itemGap
+			}
+		}
+	}
+	return 0, 0
+}
+
+func (l *List) computeItemYMultiProject(targetIdx, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines int) (startY, endY int) {
+	projGroups := l.buildProjectDisplayOrder()
+	y := 0
+	firstProject := true
+
+	for _, pg := range projGroups {
+		total := 0
+		for _, sg := range pg.statuses {
+			total += len(sg.indices)
+		}
+		if total == 0 {
+			continue
+		}
+
+		if !firstProject {
+			y++ // extra \n between projects
+		}
+		y += projectHeaderLines
+		firstProject = false
+
+		firstGroup := true
+		for _, sg := range pg.statuses {
+			if len(sg.indices) == 0 {
+				continue
+			}
+			if firstGroup {
+				y += firstDividerLines
+			} else {
+				y += dividerLines
+			}
+			firstGroup = false
+
+			for j, itemIdx := range sg.indices {
+				if itemIdx == targetIdx {
+					return y, y + itemHeight
+				}
+				y += itemHeight
+				if j < len(sg.indices)-1 {
+					y += itemGap
+				}
+			}
+		}
+	}
+	return 0, 0
+}
+
+// ensureVisible adjusts scrollOffset so that the selected item is within the viewport.
+func (l *List) ensureVisible() {
+	if len(l.items) == 0 {
+		return
+	}
+	const headerLines = 5
+	viewportHeight := l.height - headerLines
+	if viewportHeight <= 0 {
+		return
+	}
+	startY, endY := l.computeItemY(l.selectedIdx)
+	if endY > l.scrollOffset+viewportHeight {
+		l.scrollOffset = endY - viewportHeight
+	}
+	if startY < l.scrollOffset {
+		l.scrollOffset = startY
+	}
+}
+
+// clampScrollOffset ensures scrollOffset is within valid bounds.
+func (l *List) clampScrollOffset() {
+	if len(l.items) == 0 {
+		l.scrollOffset = 0
+		return
+	}
+	if l.scrollOffset < 0 {
+		l.scrollOffset = 0
+	}
+}
+
 // Down selects the next item in the list.
 func (l *List) Down() {
 	if len(l.items) == 0 {
@@ -481,6 +617,7 @@ func (l *List) Down() {
 				if i < len(l.displayOrder)-1 {
 					l.selectedIdx = l.displayOrder[i+1]
 				}
+				l.ensureVisible()
 				return
 			}
 		}
@@ -488,6 +625,7 @@ func (l *List) Down() {
 	if l.selectedIdx < len(l.items)-1 {
 		l.selectedIdx++
 	}
+	l.ensureVisible()
 }
 
 // Kill selects the next item in the list.
@@ -517,6 +655,7 @@ func (l *List) Kill() {
 
 	// Since there's items after this, the selectedIdx can stay the same.
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
+	l.clampScrollOffset()
 }
 
 // RemoveInstance removes an instance from the list without killing it
@@ -544,6 +683,8 @@ func (l *List) RemoveInstance(instance *session.Instance) {
 		l.selectedIdx--
 	}
 	l.items = append(l.items[:idx], l.items[idx+1:]...)
+	l.clampScrollOffset()
+	l.ensureVisible()
 }
 
 func (l *List) Attach() (chan struct{}, error) {
@@ -568,6 +709,7 @@ func (l *List) Up() {
 				if i > 0 {
 					l.selectedIdx = l.displayOrder[i-1]
 				}
+				l.ensureVisible()
 				return
 			}
 		}
@@ -575,6 +717,7 @@ func (l *List) Up() {
 	if l.selectedIdx > 0 {
 		l.selectedIdx--
 	}
+	l.ensureVisible()
 }
 
 func (l *List) addRepo(repo string) {
@@ -664,7 +807,7 @@ func (l *List) IndexAtY(localY int) int {
 	// Build groups to walk through the layout
 	groups := l.buildDisplayOrder()
 
-	y := localY - headerLines
+	y := localY - headerLines + l.scrollOffset
 	if y < 0 {
 		return -1
 	}
@@ -703,7 +846,7 @@ func (l *List) IndexAtY(localY int) int {
 func (l *List) indexAtYMultiProject(localY, headerLines, itemHeight, itemGap, firstDividerLines, dividerLines, projectHeaderLines int) int {
 	projGroups := l.buildProjectDisplayOrder()
 
-	y := localY - headerLines
+	y := localY - headerLines + l.scrollOffset
 	if y < 0 {
 		return -1
 	}

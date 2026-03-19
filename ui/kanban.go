@@ -20,14 +20,15 @@ type cardBound struct {
 
 // KanbanBoard renders instances organized into status columns.
 type KanbanBoard struct {
-	width, height int
-	columns       [3][]*session.Instance // [Running, Idle, Completed]
-	scrollOffset  [3]int
-	selectedInst  *session.Instance
-	spinner       *spinner.Model
-	cardBounds    []cardBound
-	cursorCol     int // 0-2: which column
-	cursorIdx     int // index within column
+	width, height  int
+	columns        [3][]*session.Instance // [Running, Idle, Completed]
+	scrollOffset   [3]int
+	lastVisibleIdx [3]int // index of last fully visible card per column; -1 if none
+	selectedInst   *session.Instance
+	spinner        *spinner.Model
+	cardBounds     []cardBound
+	cursorCol      int // 0-2: which column
+	cursorIdx      int // index within column
 
 	// Multi-project grouping
 	projectGroups  []string // ordered repo paths (current first); empty = single-project
@@ -37,7 +38,8 @@ type KanbanBoard struct {
 // NewKanbanBoard creates a new kanban board panel.
 func NewKanbanBoard(spinner *spinner.Model) *KanbanBoard {
 	return &KanbanBoard{
-		spinner: spinner,
+		spinner:        spinner,
+		lastVisibleIdx: [3]int{-1, -1, -1},
 	}
 }
 
@@ -216,6 +218,7 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 
 	lastProject := ""
 	usedHeight := 0
+	kb.lastVisibleIdx[colIdx] = -1
 	for idx := visibleStart; idx < len(instances); idx++ {
 		inst := instances[idx]
 
@@ -245,6 +248,8 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 		if usedHeight+cardH > cardAreaHeight && usedHeight > 0 {
 			break
 		}
+
+		kb.lastVisibleIdx[colIdx] = idx
 
 		// Track card bounds for click detection.
 		colX := colIdx * (kb.width / 3)
@@ -340,15 +345,23 @@ func (kb *KanbanBoard) clampCursor() {
 	}
 }
 
+// ensureCursorVisible adjusts the scroll offset for the current column so the cursor is visible.
+func (kb *KanbanBoard) ensureCursorVisible() {
+	col := kb.cursorCol
+	if kb.cursorIdx < kb.scrollOffset[col] {
+		kb.scrollOffset[col] = kb.cursorIdx
+	}
+	if kb.lastVisibleIdx[col] >= 0 && kb.cursorIdx > kb.lastVisibleIdx[col] {
+		kb.scrollOffset[col] += kb.cursorIdx - kb.lastVisibleIdx[col]
+	}
+}
+
 // CursorUp moves the cursor up within the current column.
 func (kb *KanbanBoard) CursorUp() {
 	if kb.cursorIdx > 0 {
 		kb.cursorIdx--
 	}
-	// Adjust scroll offset to keep cursor visible
-	if kb.cursorIdx < kb.scrollOffset[kb.cursorCol] {
-		kb.scrollOffset[kb.cursorCol] = kb.cursorIdx
-	}
+	kb.ensureCursorVisible()
 	kb.syncSelectedFromCursor()
 }
 
@@ -358,6 +371,7 @@ func (kb *KanbanBoard) CursorDown() {
 	if kb.cursorIdx < colLen-1 {
 		kb.cursorIdx++
 	}
+	kb.ensureCursorVisible()
 	kb.syncSelectedFromCursor()
 }
 
@@ -369,6 +383,7 @@ func (kb *KanbanBoard) CursorLeft() {
 			if kb.cursorIdx >= len(kb.columns[col]) {
 				kb.cursorIdx = len(kb.columns[col]) - 1
 			}
+			kb.ensureCursorVisible()
 			kb.syncSelectedFromCursor()
 			return
 		}
@@ -383,6 +398,7 @@ func (kb *KanbanBoard) CursorRight() {
 			if kb.cursorIdx >= len(kb.columns[col]) {
 				kb.cursorIdx = len(kb.columns[col]) - 1
 			}
+			kb.ensureCursorVisible()
 			kb.syncSelectedFromCursor()
 			return
 		}
