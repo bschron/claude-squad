@@ -277,16 +277,17 @@ func (t *TmuxSession) SendKeys(keys string) error {
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
 // the tmux pane has a prompt for aider or claude code.
-func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
+func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, hasBackgroundTasks bool) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
-		return false, false
+		return false, false, false
 	}
 
 	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
 	if t.program == ProgramClaude {
 		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
+		hasBackgroundTasks = strings.Contains(content, "background task")
 	} else if strings.HasPrefix(t.program, ProgramAider) {
 		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	} else if strings.HasPrefix(t.program, ProgramGemini) {
@@ -295,9 +296,9 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
 		t.monitor.prevOutputHash = t.monitor.hash(content)
-		return true, hasPrompt
+		return true, hasPrompt, hasBackgroundTasks
 	}
-	return false, hasPrompt
+	return false, hasPrompt, hasBackgroundTasks
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {

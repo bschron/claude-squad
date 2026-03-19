@@ -391,13 +391,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				continue
 			}
 			instance.CheckAndHandleTrustPrompt()
-			updated, prompt := instance.HasUpdated()
+			updated, prompt, backgroundTasks := instance.HasUpdated()
 			if updated {
 				instance.SetStatus(session.Running)
 				instance.IdleSince = nil
 			} else {
 				if prompt {
 					instance.TapEnter()
+				} else if backgroundTasks {
+					// Background agents running — don't transition to idle
+					instance.IdleSince = nil
 				} else {
 					if instance.IdleSince == nil {
 						// First idle tick — record timestamp, keep current status
