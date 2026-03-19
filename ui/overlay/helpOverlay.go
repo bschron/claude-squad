@@ -37,7 +37,8 @@ const (
 	configIndexSoundAlert    = 3
 	configIndexAlertSound    = 4
 	configIndexInstanceLimit = 5
-	configItemCount          = 6
+	configIndexAutoQuit      = 6
+	configItemCount          = 7
 )
 
 // HelpOverlay combines read-only help text with an editable Configs section.
@@ -49,9 +50,10 @@ type HelpOverlay struct {
 	soundToggle        *SoundToggle
 	soundPicker        *SoundPicker
 	instanceLimitPicker *InstanceLimitPicker
+	autoQuitToggle      *AutoQuitToggle
 	configMode         bool
-	configIndex        int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound, 5=instance limit
-	onSave             func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int)
+	configIndex        int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound, 5=instance limit, 6=auto-quit
+	onSave             func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int, bool)
 	width              int
 }
 
@@ -64,7 +66,8 @@ func NewHelpOverlay(
 	defaultSoundAlert bool,
 	defaultAlertSound config.SoundOption,
 	defaultInstanceLimit int,
-	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int),
+	defaultAutoQuit bool,
+	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int, bool),
 ) *HelpOverlay {
 	return &HelpOverlay{
 		helpContent:         helpContent,
@@ -74,6 +77,7 @@ func NewHelpOverlay(
 		soundToggle:         NewSoundToggle(defaultSoundAlert),
 		soundPicker:         NewSoundPicker(defaultAlertSound),
 		instanceLimitPicker: NewInstanceLimitPicker(defaultInstanceLimit),
+		autoQuitToggle:      NewAutoQuitToggle(defaultAutoQuit),
 		onSave:              onSave,
 	}
 }
@@ -100,6 +104,9 @@ func (h *HelpOverlay) SetWidth(width int) {
 	if h.instanceLimitPicker != nil {
 		h.instanceLimitPicker.SetWidth(innerWidth)
 	}
+	if h.autoQuitToggle != nil {
+		h.autoQuitToggle.SetWidth(innerWidth)
+	}
 }
 
 // focusCurrentConfig focuses the config item at configIndex.
@@ -117,6 +124,8 @@ func (h *HelpOverlay) focusCurrentConfig() {
 		h.soundPicker.Focus()
 	case configIndexInstanceLimit:
 		h.instanceLimitPicker.Focus()
+	case configIndexAutoQuit:
+		h.autoQuitToggle.Focus()
 	}
 }
 
@@ -135,6 +144,8 @@ func (h *HelpOverlay) blurCurrentConfig() {
 		h.soundPicker.Blur()
 	case configIndexInstanceLimit:
 		h.instanceLimitPicker.Blur()
+	case configIndexAutoQuit:
+		h.autoQuitToggle.Blur()
 	}
 }
 
@@ -179,6 +190,8 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 				h.soundPicker.HandleKeyPress(msg)
 			case configIndexInstanceLimit:
 				h.instanceLimitPicker.HandleKeyPress(msg)
+			case configIndexAutoQuit:
+				h.autoQuitToggle.HandleKeyPress(msg)
 			}
 			return false
 		default:
@@ -203,6 +216,7 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			h.soundToggle.GetEnabled(),
 			h.soundPicker.GetSelectedSound(),
 			h.instanceLimitPicker.GetSelectedLimit(),
+			h.autoQuitToggle.GetEnabled(),
 		)
 	}
 	return true
@@ -279,6 +293,15 @@ func (h *HelpOverlay) Render() string {
 		b.WriteString("  ")
 	}
 	b.WriteString(h.instanceLimitPicker.Render())
+	b.WriteString("\n\n")
+
+	// Auto-quit interactive toggle
+	if h.configMode && h.configIndex == configIndexAutoQuit {
+		b.WriteString(hoActiveIndicator.Render("> "))
+	} else if h.configMode {
+		b.WriteString("  ")
+	}
+	b.WriteString(h.autoQuitToggle.Render())
 	b.WriteString("\n\n")
 
 	b.WriteString(divider)

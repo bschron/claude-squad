@@ -138,6 +138,8 @@ type home struct {
 	projectSelector *overlay.ProjectSelectorOverlay
 	// pendingNewInstancePromptMode tracks whether the pending new instance should enter prompt mode
 	pendingNewInstancePromptMode bool
+	// autoQuitGeneration is a generation counter for auto-quit timers in interactive mode
+	autoQuitGeneration uint64
 }
 
 func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
@@ -516,6 +518,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case autoQuitTimeoutMsg:
+		if m.state == stateInteractive && msg.generation == m.autoQuitGeneration {
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			m.tabbedWindow.SetPreviewInteractive(false)
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -745,6 +754,7 @@ func (m *home) createNewInstance(path string, promptMode bool) (tea.Model, tea.C
 func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Ctrl+Q exits interactive mode
 	if msg.Type == tea.KeyCtrlQ {
+		m.autoQuitGeneration++
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
@@ -754,6 +764,7 @@ func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	selected := m.getActiveInstance()
 	if selected == nil || !selected.TmuxAlive() {
 		// Instance died, exit interactive mode
+		m.autoQuitGeneration++
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		m.tabbedWindow.SetPreviewInteractive(false)
@@ -765,6 +776,10 @@ func (m *home) handleInteractiveState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err := selected.SendKeys(translated); err != nil {
 			log.ErrorLog.Printf("interactive send keys failed: %v", err)
 		}
+	}
+	if m.projectConfig.GetAutoQuitInteractive() {
+		m.autoQuitGeneration++
+		return m, m.startAutoQuitTimer()
 	}
 	return m, nil
 }
@@ -1440,6 +1455,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = stateInteractive
 		m.menu.SetState(ui.StateInteractive)
 		m.tabbedWindow.SetPreviewInteractive(true)
+		if m.projectConfig.GetAutoQuitInteractive() {
+			m.autoQuitGeneration++
+			return m, m.startAutoQuitTimer()
+		}
 		return m, nil
 	case keys.KeyNotes:
 		selected := m.getActiveInstance()
@@ -1509,6 +1528,20 @@ func (m *home) instanceChanged() tea.Cmd {
 		return m.handleError(err)
 	}
 	return nil
+}
+
+type autoQuitTimeoutMsg struct {
+	generation uint64
+}
+
+const autoQuitTimeout = 15 * time.Second
+
+func (m *home) startAutoQuitTimer() tea.Cmd {
+	gen := m.autoQuitGeneration
+	return func() tea.Msg {
+		time.Sleep(autoQuitTimeout)
+		return autoQuitTimeoutMsg{generation: gen}
+	}
 }
 
 type keyupMsg struct{}
@@ -1699,6 +1732,10 @@ func (m *home) handleMouseWheel(button tea.MouseButton, x, y int) (tea.Model, te
 			m.tabbedWindow.ScrollUp()
 		} else {
 			m.tabbedWindow.ScrollDown()
+		}
+		if m.projectConfig.GetAutoQuitInteractive() {
+			m.autoQuitGeneration++
+			return m, m.startAutoQuitTimer()
 		}
 		return m, nil
 	}

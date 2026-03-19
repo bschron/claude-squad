@@ -119,8 +119,9 @@ type ProjectConfig struct {
 	SkipPermissions  *bool       `json:"skip_permissions,omitempty"`
 	SoundAlert       *bool       `json:"sound_alert,omitempty"`
 	AlertSound       SoundOption `json:"alert_sound,omitempty"`
-	InstanceLimit    *int        `json:"instance_limit,omitempty"`
-	SelectedProjects []string    `json:"selected_projects,omitempty"`
+	InstanceLimit        *int        `json:"instance_limit,omitempty"`
+	AutoQuitInteractive  *bool       `json:"auto_quit_interactive,omitempty"`
+	SelectedProjects     []string    `json:"selected_projects,omitempty"`
 }
 
 // GetSelectedProjects returns selected project paths, filtering out non-existent ones.
@@ -164,6 +165,19 @@ func (c *ProjectConfig) SetInstanceLimit(v int) {
 		v = MaxInstanceLimit
 	}
 	c.InstanceLimit = &v
+}
+
+// GetAutoQuitInteractive returns the effective auto-quit interactive value (nil defaults to false).
+func (c *ProjectConfig) GetAutoQuitInteractive() bool {
+	if c.AutoQuitInteractive == nil {
+		return false
+	}
+	return *c.AutoQuitInteractive
+}
+
+// SetAutoQuitInteractive sets the auto-quit interactive value.
+func (c *ProjectConfig) SetAutoQuitInteractive(v bool) {
+	c.AutoQuitInteractive = &v
 }
 
 // GetSoundAlert returns the effective sound alert value (nil defaults to false).
