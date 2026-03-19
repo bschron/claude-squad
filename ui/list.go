@@ -381,20 +381,26 @@ func (l *List) String() string {
 
 	content := b.String()
 
-	// Apply scroll offset: keep header lines, skip scrollOffset lines from items area
-	if l.scrollOffset > 0 {
-		lines := strings.Split(content, "\n")
-		const headerLineCount = 5
-		if len(lines) > headerLineCount {
-			header := lines[:headerLineCount]
-			items := lines[headerLineCount:]
+	// Apply scroll offset and clip to viewport to prevent overflow
+	lines := strings.Split(content, "\n")
+	const headerLineCount = 5
+	if len(lines) > headerLineCount {
+		header := lines[:headerLineCount]
+		items := lines[headerLineCount:]
+		// Skip scrollOffset lines
+		if l.scrollOffset > 0 {
 			if l.scrollOffset < len(items) {
 				items = items[l.scrollOffset:]
 			} else {
 				items = nil
 			}
-			content = strings.Join(append(header, items...), "\n")
 		}
+		// Clip to viewport height so content doesn't overflow the panel
+		viewportHeight := l.height - headerLineCount
+		if viewportHeight > 0 && len(items) > viewportHeight {
+			items = items[:viewportHeight]
+		}
+		content = strings.Join(append(header, items...), "\n")
 	}
 
 	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, content)
