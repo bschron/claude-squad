@@ -12,10 +12,42 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+var (
+	kanbanHeaderStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("62")).
+				Foreground(lipgloss.Color("230")).
+				Bold(true).
+				AlignHorizontal(lipgloss.Center)
+
+	kanbanSubHeaderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"}).
+				Italic(true)
+)
+
 // cardBound tracks the screen position of a rendered card for click detection.
 type cardBound struct {
 	rect     Rect
 	instance *session.Instance
+}
+
+// cardCacheKey captures every input that can change the rendered card output.
+// Two renders that produce the same key are guaranteed to produce identical strings.
+type cardCacheKey struct {
+	status   session.Status
+	title    string
+	branch   string
+	added    int
+	removed  int
+	diffOK   bool // whether diff stats should be shown
+	selected bool
+	width    int
+	elapsed  string // formatted duration, since wall-clock ticks change this
+	icon     string // pre-rendered status icon (captures spinner frame)
+}
+
+type cardCacheEntry struct {
+	key    cardCacheKey
+	result string
 }
 
 // KanbanBoard renders instances organized into status columns.
@@ -33,6 +65,10 @@ type KanbanBoard struct {
 	// Multi-project grouping
 	projectGroups  []string // ordered repo paths (current first); empty = single-project
 	currentProject string
+
+	// cardCache memoizes rendered cards keyed by instance pointer. Entries
+	// are evicted in UpdateInstances when the instance set changes.
+	cardCache map[*session.Instance]cardCacheEntry
 }
 
 // NewKanbanBoard creates a new kanban board panel.
@@ -40,6 +76,7 @@ func NewKanbanBoard(spinner *spinner.Model) *KanbanBoard {
 	return &KanbanBoard{
 		spinner:        spinner,
 		lastVisibleIdx: [3]int{-1, -1, -1},
+		cardCache:      make(map[*session.Instance]cardCacheEntry),
 	}
 }
 
@@ -87,7 +124,10 @@ func (kb *KanbanBoard) UpdateInstances(instances []*session.Instance, selected *
 	// Clear columns
 	kb.columns = [3][]*session.Instance{}
 
+	// Track live instance pointers so we can evict cache entries for removed ones.
+	live := make(map[*session.Instance]struct{}, len(instances))
 	for _, inst := range instances {
+		live[inst] = struct{}{}
 		switch inst.Status {
 		case session.Running, session.Loading:
 			kb.columns[0] = append(kb.columns[0], inst)
@@ -95,6 +135,11 @@ func (kb *KanbanBoard) UpdateInstances(instances []*session.Instance, selected *
 			kb.columns[1] = append(kb.columns[1], inst)
 		case session.Paused:
 			kb.columns[2] = append(kb.columns[2], inst)
+		}
+	}
+	for inst := range kb.cardCache {
+		if _, ok := live[inst]; !ok {
+			delete(kb.cardCache, inst)
 		}
 	}
 
@@ -188,17 +233,19 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 	count := len(kb.columns[colIdx])
 	header := fmt.Sprintf(" %s [%d] ", columnHeaders[colIdx], count)
 
-	headerStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true).
-		Width(width).
-		AlignHorizontal(lipgloss.Center)
-
-	renderedHeader := headerStyle.Render(header)
+	renderedHeader := kanbanHeaderStyle.Width(width).Render(header)
 
 	// Card area height = total height minus header (1 line) minus spacing (1 line)
 	cardAreaHeight := kb.height - 3
+
+	// Pre-compute the status icon for Running/Loading cards once per render,
+	// so sp.View() is not re-evaluated per card.
+	runningIcon := readyStyle.Render(readyIcon)
+	if kb.spinner != nil {
+		runningIcon = readyStyle.Render(kb.spinner.View()) + " "
+	}
+	readyIconRendered := readyStyle.Render(readyIcon)
+	pausedIconRendered := pausedStyle.Render(pausedIcon)
 
 	// Render cards
 	var cardLines []string
@@ -211,10 +258,6 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 
 	visibleStart := kb.scrollOffset[colIdx]
 	multiProject := kb.IsMultiProject()
-
-	subHeaderStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"}).
-		Italic(true)
 
 	lastProject := ""
 	usedHeight := 0
@@ -236,17 +279,34 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 				if usedHeight+subHeaderHeight > cardAreaHeight {
 					break
 				}
-				cardLines = append(cardLines, subHeaderStyle.Render(hdr))
+				cardLines = append(cardLines, kanbanSubHeaderStyle.Render(hdr))
 				usedHeight += subHeaderHeight
 				lastProject = rp
 			}
 		}
 
-		card := renderCard(inst, inst == kb.selectedInst, cardWidth, kb.spinner)
-		cardH := lipgloss.Height(card)
+		var icon string
+		switch inst.Status {
+		case session.Running, session.Loading:
+			icon = runningIcon
+		case session.Ready:
+			icon = readyIconRendered
+		case session.Paused:
+			icon = pausedIconRendered
+		}
 
-		if usedHeight+cardH > cardAreaHeight && usedHeight > 0 {
+		if usedHeight+KanbanCardHeight > cardAreaHeight && usedHeight > 0 {
 			break
+		}
+
+		selected := inst == kb.selectedInst
+		key := cardKeyFor(inst, selected, cardWidth, icon)
+		var card string
+		if entry, ok := kb.cardCache[inst]; ok && entry.key == key {
+			card = entry.result
+		} else {
+			card = renderCard(inst, selected, cardWidth, icon)
+			kb.cardCache[inst] = cardCacheEntry{key: key, result: card}
 		}
 
 		kb.lastVisibleIdx[colIdx] = idx
@@ -256,23 +316,38 @@ func (kb *KanbanBoard) renderColumn(colIdx, width int) string {
 		cardY := 2 + usedHeight // 1 header line + 1 spacing line
 
 		kb.cardBounds = append(kb.cardBounds, cardBound{
-			rect:     Rect{X: colX + 1, Y: cardY, Width: cardWidth, Height: cardH},
+			rect:     Rect{X: colX + 1, Y: cardY, Width: cardWidth, Height: KanbanCardHeight},
 			instance: inst,
 		})
 
 		cardLines = append(cardLines, card)
-		usedHeight += cardH
+		usedHeight += KanbanCardHeight
 	}
 
-	body := strings.Join(cardLines, "\n")
-
-	column := lipgloss.JoinVertical(lipgloss.Left,
-		renderedHeader,
-		"",
-		body,
-	)
-
-	return lipgloss.Place(width, kb.height, lipgloss.Left, lipgloss.Top, column)
+	// Build the column manually to avoid lipgloss.Place's per-line Unicode
+	// width measurement across the full column area. Every line produced here
+	// is already `width` cells wide (header has Width(width); cards use
+	// Width(width-2) + 2 border columns = width; sub-headers pad with "─").
+	var col strings.Builder
+	col.Grow(width * kb.height)
+	col.WriteString(renderedHeader)
+	col.WriteByte('\n')
+	col.WriteByte('\n')
+	for i, cl := range cardLines {
+		if i > 0 {
+			col.WriteByte('\n')
+		}
+		col.WriteString(cl)
+	}
+	totalLines := 2 + usedHeight
+	if totalLines < kb.height {
+		pad := strings.Repeat(" ", width)
+		for i := totalLines; i < kb.height; i++ {
+			col.WriteByte('\n')
+			col.WriteString(pad)
+		}
+	}
+	return col.String()
 }
 
 // HandleClick tests the given local coordinates against recorded card bounds

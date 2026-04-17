@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
@@ -20,17 +19,46 @@ var (
 	cardTimeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
 
+	cardStyleDim = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(cardDimBorder).
+			Padding(0, 1)
+
+	cardStyleSel = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(highlightColor).
+			Padding(0, 1)
 )
 
+// KanbanCardHeight is the total rendered height of a kanban card:
+// 3 content lines + top border + bottom border = 5.
+const KanbanCardHeight = 5
+
+// cardKeyFor builds a cache key that captures every input renderCard reads.
+func cardKeyFor(inst *session.Instance, selected bool, width int, icon string) cardCacheKey {
+	k := cardCacheKey{
+		status:   inst.Status,
+		title:    inst.Title,
+		branch:   inst.Branch,
+		selected: selected,
+		width:    width,
+		elapsed:  formatDuration(time.Since(inst.CreatedAt)),
+		icon:     icon,
+	}
+	if stat := inst.GetDiffStats(); stat != nil && stat.Error == nil && !stat.IsEmpty() {
+		k.diffOK = true
+		k.added = stat.Added
+		k.removed = stat.Removed
+	}
+	return k
+}
+
 // renderCard renders a single kanban card for the given instance.
-func renderCard(inst *session.Instance, selected bool, width int, sp *spinner.Model) string {
+// icon is the pre-rendered status icon (spinner or static), supplied by the
+// caller so the spinner view is computed once per render, not once per card.
+func renderCard(inst *session.Instance, selected bool, width int, icon string) string {
 	if inst == nil {
 		return ""
-	}
-
-	borderColor := cardDimBorder
-	if selected {
-		borderColor = highlightColor
 	}
 
 	innerWidth := width - 4 // 2 for border + 2 for padding
@@ -38,29 +66,14 @@ func renderCard(inst *session.Instance, selected bool, width int, sp *spinner.Mo
 		innerWidth = 6
 	}
 
-	cardStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Width(width - 2). // account for border
-		Padding(0, 1)
+	style := cardStyleDim
+	if selected {
+		style = cardStyleSel
+	}
+	style = style.Width(width - 2) // account for border
 
 	// -- Line 1: Status icon + Title --
-	var icon string
-	switch inst.Status {
-	case session.Running, session.Loading:
-		if sp != nil {
-			icon = readyStyle.Render(sp.View()) + " "
-		} else {
-			icon = readyStyle.Render(readyIcon)
-		}
-	case session.Ready:
-		icon = readyStyle.Render(readyIcon)
-	case session.Paused:
-		icon = pausedStyle.Render(pausedIcon)
-	}
-
 	titleText := inst.Title
-	// Truncate title if too long (leave room for icon ~2 chars)
 	maxTitle := innerWidth - 3
 	if maxTitle > 0 && runewidth.StringWidth(titleText) > maxTitle {
 		titleText = runewidth.Truncate(titleText, maxTitle-3, "...")
@@ -84,18 +97,21 @@ func renderCard(inst *session.Instance, selected bool, width int, sp *spinner.Mo
 	if diffWidth > 0 {
 		branchAvail -= 1 // space between branch and diff
 	}
-	if branchAvail > 0 && runewidth.StringWidth(branch) > branchAvail {
+	branchWidth := runewidth.StringWidth(branch)
+	if branchAvail > 0 && branchWidth > branchAvail {
 		if branchAvail > 3 {
 			branch = runewidth.Truncate(branch, branchAvail-3, "...")
+			branchWidth = runewidth.StringWidth(branch)
 		} else {
 			branch = ""
+			branchWidth = 0
 		}
 	}
 
 	var branchLine string
 	if diffStr != "" {
 		spaces := ""
-		remaining := innerWidth - runewidth.StringWidth(branch) - diffWidth
+		remaining := innerWidth - branchWidth - diffWidth
 		if remaining > 0 {
 			spaces = strings.Repeat(" ", remaining)
 		}
@@ -113,7 +129,7 @@ func renderCard(inst *session.Instance, selected bool, width int, sp *spinner.Mo
 
 	lines := []string{titleLine, branchLine, timeLine}
 
-	return cardStyle.Render(strings.Join(lines, "\n"))
+	return style.Render(strings.Join(lines, "\n"))
 }
 
 // formatDuration returns a human-readable short duration string.
