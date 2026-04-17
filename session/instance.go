@@ -83,6 +83,11 @@ type Instance struct {
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
+	// lastDiffContentUpdate records when Content was last populated by
+	// UpdateDiffContent. Used to debounce full-diff refreshes while the
+	// Diff tab is visible.
+	lastDiffContentUpdate time.Time
+
 	// selectedBranch is the existing branch to start on (empty = new branch from HEAD)
 	selectedBranch string
 
@@ -455,6 +460,17 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool, hasBackgroundTask
 	return i.tmuxSession.HasUpdated()
 }
 
+// PollStatus performs a single tmux capture-pane and derives all status signals
+// (trust-prompt dismissal, content-change detection, prompt/background flags)
+// from that one capture. Use this on the metadata tick instead of calling
+// CheckAndHandleTrustPrompt + HasUpdated back-to-back (which captured twice).
+func (i *Instance) PollStatus() (updated bool, hasPrompt bool, hasBackgroundTasks bool) {
+	if !i.started || i.tmuxSession == nil {
+		return false, false, false
+	}
+	return i.tmuxSession.PollStatus()
+}
+
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {
@@ -699,30 +715,80 @@ func (i *Instance) Revive() error {
 	return nil
 }
 
-// UpdateDiffStats updates the git diff statistics for this instance
+// UpdateDiffStats refreshes only the added/removed counts via `git diff --shortstat`.
+// This runs on every metadata tick, so it must stay cheap — the full diff content
+// is fetched separately by UpdateDiffContent when the Diff tab needs it.
 func (i *Instance) UpdateDiffStats() error {
+	stats, err := i.FetchQuickStats()
+	if err != nil {
+		return err
+	}
+	i.ApplyDiffStats(stats)
+	return nil
+}
+
+// FetchQuickStats runs `git diff --shortstat` without mutating the Instance.
+// Safe to call from a background goroutine; apply the result via ApplyDiffStats
+// from the main goroutine.
+func (i *Instance) FetchQuickStats() (*git.DiffStats, error) {
+	if !i.started {
+		return nil, nil
+	}
+	if i.Status == Paused {
+		return nil, nil
+	}
+	stats := i.gitWorktree.QuickStats()
+	if stats.Error != nil {
+		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get diff stats: %w", stats.Error)
+	}
+	return stats, nil
+}
+
+// ApplyDiffStats assigns the given stats to the instance, preserving any
+// previously-fetched Content so the Diff tab keeps showing it until the next
+// UpdateDiffContent.
+func (i *Instance) ApplyDiffStats(stats *git.DiffStats) {
 	if !i.started {
 		i.diffStats = nil
-		return nil
+		return
 	}
-
 	if i.Status == Paused {
-		// Keep the previous diff stats if the instance is paused
+		return
+	}
+	if stats == nil {
+		i.diffStats = nil
+		return
+	}
+	if i.diffStats != nil {
+		stats.Content = i.diffStats.Content
+	}
+	i.diffStats = stats
+}
+
+// UpdateDiffContent refreshes the full diff content (expensive) for this instance.
+// Call this on demand when the Diff tab is visible, not on the metadata tick.
+func (i *Instance) UpdateDiffContent() error {
+	if !i.started || i.Status == Paused {
 		return nil
 	}
-
 	stats := i.gitWorktree.Diff()
 	if stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
-			// Worktree is not fully set up yet, not an error
-			i.diffStats = nil
 			return nil
 		}
-		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
+		return fmt.Errorf("failed to get diff content: %w", stats.Error)
 	}
-
 	i.diffStats = stats
+	i.lastDiffContentUpdate = time.Now()
 	return nil
+}
+
+// LastDiffContentUpdate returns when the full diff content was last refreshed.
+func (i *Instance) LastDiffContentUpdate() time.Time {
+	return i.lastDiffContentUpdate
 }
 
 // GetDiffStats returns the current git diff statistics

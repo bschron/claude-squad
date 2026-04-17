@@ -4,6 +4,9 @@ import (
 	"claude-squad/config"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -37,16 +40,27 @@ type GitWorktreeData struct {
 	IsExistingBranch bool   `json:"is_existing_branch"`
 }
 
-// DiffStatsData represents the serializable data of a DiffStats
+// DiffStatsData represents the serializable data of a DiffStats.
+// Content is intentionally not serialized: it's recomputed via `git diff`
+// on every metadata tick, and persisting it bloats state.json into the
+// hundreds of megabytes for worktrees with large diffs.
 type DiffStatsData struct {
 	Added   int    `json:"added"`
 	Removed int    `json:"removed"`
-	Content string `json:"content"`
+	Content string `json:"-"`
 }
 
 // Storage handles saving and loading instances using the state interface
 type Storage struct {
 	state config.InstanceStorage
+
+	// Cache for GetStoredTitles keyed by state file mtime. The state file is
+	// modified only when SaveInstances runs (this process or another), so
+	// between saves we reuse the parsed result instead of re-parsing the
+	// entire JSON on every metadata tick.
+	titlesMu      sync.Mutex
+	titlesCache   map[string]bool
+	titlesCacheMT time.Time
 }
 
 // NewStorage creates a new storage instance
@@ -237,8 +251,23 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 }
 
 // GetStoredTitles returns the set of instance titles currently in storage.
-// This reads directly from disk to detect changes made by other running instances.
+// This reads directly from disk to detect changes made by other running
+// instances. The result is cached by state-file mtime so repeated calls
+// between writes return instantly.
 func (s *Storage) GetStoredTitles() (map[string]bool, error) {
+	configDir, err := config.GetConfigDir()
+	if err == nil {
+		if fi, statErr := os.Stat(filepath.Join(configDir, config.StateFileName)); statErr == nil {
+			s.titlesMu.Lock()
+			if s.titlesCache != nil && fi.ModTime().Equal(s.titlesCacheMT) {
+				cached := s.titlesCache
+				s.titlesMu.Unlock()
+				return cached, nil
+			}
+			s.titlesMu.Unlock()
+		}
+	}
+
 	jsonData, err := s.state.ReadInstancesFromDisk()
 	if err != nil {
 		return nil, err
@@ -251,6 +280,16 @@ func (s *Storage) GetStoredTitles() (map[string]bool, error) {
 	for _, d := range data {
 		titles[d.Title] = true
 	}
+
+	if configDir, cdErr := config.GetConfigDir(); cdErr == nil {
+		if fi, statErr := os.Stat(filepath.Join(configDir, config.StateFileName)); statErr == nil {
+			s.titlesMu.Lock()
+			s.titlesCache = titles
+			s.titlesCacheMT = fi.ModTime()
+			s.titlesMu.Unlock()
+		}
+	}
+
 	return titles, nil
 }
 

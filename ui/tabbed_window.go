@@ -3,10 +3,15 @@ package ui
 import (
 	"claude-squad/log"
 	"claude-squad/session"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// diffContentRefreshInterval debounces full-diff fetches while the Diff tab is
+// visible. Stats (added/removed) refresh on every metadata tick regardless.
+const diffContentRefreshInterval = 2 * time.Second
 
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 	border := lipgloss.RoundedBorder()
@@ -116,6 +121,15 @@ func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
 func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
 	if w.activeTab != DiffTab {
 		return
+	}
+	// Refresh full diff content on demand, debounced. Cheap --shortstat refreshes
+	// continue happening on the metadata tick via UpdateDiffStats.
+	if instance != nil && instance.Started() && !instance.Paused() {
+		if time.Since(instance.LastDiffContentUpdate()) > diffContentRefreshInterval {
+			if err := instance.UpdateDiffContent(); err != nil {
+				log.WarningLog.Printf("could not update diff content: %v", err)
+			}
+		}
 	}
 	w.diff.SetDiff(instance)
 }

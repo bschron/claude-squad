@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -21,7 +22,41 @@ func (d *DiffStats) IsEmpty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Content == ""
 }
 
-// Diff returns the git diff between the worktree and the base branch along with statistics
+// QuickStats returns only the added/removed line counts using `git diff --shortstat`,
+// which produces a single short line regardless of diff size. Use this on the
+// frequent metadata tick to avoid streaming multi-MB diffs for every instance.
+func (g *GitWorktree) QuickStats() *DiffStats {
+	stats := &DiffStats{}
+
+	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
+		stats.Error = err
+		return stats
+	}
+
+	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--shortstat", g.GetBaseCommitSHA())
+	if err != nil {
+		stats.Error = err
+		return stats
+	}
+
+	// Output is either empty (no changes) or one line like:
+	//   " 2 files changed, 15 insertions(+), 3 deletions(-)"
+	// Any of the insertion/deletion clauses may be missing when the value is zero.
+	for _, part := range strings.Split(strings.TrimSpace(out), ",") {
+		part = strings.TrimSpace(part)
+		switch {
+		case strings.Contains(part, "insertion"):
+			fmt.Sscanf(part, "%d", &stats.Added)
+		case strings.Contains(part, "deletion"):
+			fmt.Sscanf(part, "%d", &stats.Removed)
+		}
+	}
+	return stats
+}
+
+// Diff returns the git diff between the worktree and the base branch along with statistics,
+// including the full diff content. This is O(diff size) and should be invoked on demand
+// (e.g. when the Diff tab is visible), not on the metadata tick.
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 

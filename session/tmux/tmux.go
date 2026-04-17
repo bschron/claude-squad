@@ -283,8 +283,48 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, hasBackgroundT
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
 		return false, false, false
 	}
+	return t.analyzeContent(content)
+}
 
-	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
+// PollStatus captures the tmux pane content once and performs all content-derived
+// status checks: handling trust prompts, detecting prompts/background tasks, and
+// updating the content-change hash. Returns the same signals as HasUpdated but
+// with a single capture-pane invocation per tick, cutting subprocess cost in half.
+func (t *TmuxSession) PollStatus() (updated bool, hasPrompt bool, hasBackgroundTasks bool) {
+	content, err := t.CapturePaneContent()
+	if err != nil {
+		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
+		return false, false, false
+	}
+	t.handleTrustPromptFromContent(content)
+	return t.analyzeContent(content)
+}
+
+// handleTrustPromptFromContent mirrors CheckAndHandleTrustPrompt but operates on
+// already-captured content to avoid a second capture-pane call.
+func (t *TmuxSession) handleTrustPromptFromContent(content string) {
+	if strings.HasSuffix(t.program, ProgramClaude) {
+		if strings.Contains(content, "Do you trust the files in this folder?") ||
+			strings.Contains(content, "new MCP server") {
+			if err := t.TapEnter(); err != nil {
+				log.ErrorLog.Printf("could not tap enter on trust/MCP screen: %v", err)
+			}
+		}
+		return
+	}
+	if !strings.HasSuffix(t.program, ProgramAider) && !strings.HasSuffix(t.program, ProgramGemini) {
+		return
+	}
+	if strings.Contains(content, "Open documentation url for more info") {
+		if err := t.TapDAndEnter(); err != nil {
+			log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+		}
+	}
+}
+
+// analyzeContent runs the prompt / background-task detection and content-change
+// hash update on a previously-captured pane content string.
+func (t *TmuxSession) analyzeContent(content string) (updated bool, hasPrompt bool, hasBackgroundTasks bool) {
 	if t.program == ProgramClaude {
 		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
 		hasBackgroundTasks = strings.Contains(content, "background task")
@@ -294,11 +334,12 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, hasBackgroundT
 		hasPrompt = strings.Contains(content, "Yes, allow once")
 	}
 
-	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
-		t.monitor.prevOutputHash = t.monitor.hash(content)
-		return true, hasPrompt, hasBackgroundTasks
+	newHash := t.monitor.hash(content)
+	if !bytes.Equal(newHash, t.monitor.prevOutputHash) {
+		t.monitor.prevOutputHash = newHash
+		updated = true
 	}
-	return false, hasPrompt, hasBackgroundTasks
+	return
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {

@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -22,6 +24,7 @@ var (
 	programFlag string
 	autoYesFlag bool
 	daemonFlag  bool
+	pprofFlag   string
 	rootCmd     = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
@@ -29,6 +32,14 @@ var (
 			ctx := context.Background()
 			log.Initialize(daemonFlag)
 			defer log.Close()
+
+			if pprofFlag != "" {
+				go func() {
+					if err := http.ListenAndServe(pprofFlag, nil); err != nil {
+						log.ErrorLog.Printf("pprof server failed: %v", err)
+					}
+				}()
+			}
 
 			if daemonFlag {
 				cfg := config.LoadConfig()
@@ -163,6 +174,7 @@ func init() {
 		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
+	rootCmd.Flags().StringVar(&pprofFlag, "pprof", "", "Enable pprof HTTP server on given addr (e.g. localhost:6060)")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

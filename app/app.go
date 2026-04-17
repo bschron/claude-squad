@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -167,8 +168,14 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 	projectConfig := config.LoadProjectConfig(gitRepoRoot)
 
 	h := &home{
-		ctx:           ctx,
-		spinner:       spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		ctx: ctx,
+		// MiniDot frames at a slower FPS: 12Hz (default) forced a View()
+		// invocation every ~83ms even when nothing else changed. 6Hz is
+		// visually indistinguishable and halves render load.
+		spinner: spinner.New(spinner.WithSpinner(spinner.Spinner{
+			Frames: spinner.MiniDot.Frames,
+			FPS:    time.Second / 6,
+		})),
 		menu:          ui.NewMenu(),
 		tabbedWindow:  ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
 		errBox:        ui.NewErrBox(),
@@ -325,7 +332,7 @@ func (m *home) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(250 * time.Millisecond)
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd,
@@ -349,89 +356,63 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case tickUpdateMetadataMessage:
-		// Prune instances killed externally by another cs instance.
-		var deadInstances []*session.Instance
-		var storedTitles map[string]bool
-		for _, instance := range m.list.GetInstances() {
-			if !instance.Started() || instance.IsExternal() {
-				continue
-			}
-			if instance.Paused() {
-				// Paused sessions: tmux/worktree are normally gone, check storage instead
-				if storedTitles == nil {
-					var err error
-					storedTitles, err = m.storage.GetStoredTitles()
-					if err != nil {
-						log.ErrorLog.Printf("could not load stored titles: %v", err)
-						break
-					}
-				}
-				if !storedTitles[instance.Title] {
-					deadInstances = append(deadInstances, instance)
-				}
-			} else if !instance.TmuxAlive() && !instance.WorktreeExists() {
-				// Non-paused: tmux dead + worktree gone = killed externally
-				deadInstances = append(deadInstances, instance)
-			}
-		}
-		if len(deadInstances) > 0 {
-			for _, dead := range deadInstances {
+		// Single coalesced cmd: all tick-scoped I/O (dead-instance scan +
+		// per-instance metadata refresh) runs in parallel and returns one
+		// message, so the event loop renders once per tick.
+		return m, tea.Batch(
+			tickUpdateMetadataCmd,
+			tickMetadataCmd(m.list.GetInstances(), m.storage),
+		)
+	case tickMetadataMsg:
+		if len(msg.dead) > 0 {
+			for _, dead := range msg.dead {
 				log.WarningLog.Printf("removing externally killed session: %s", dead.Title)
 				m.tabbedWindow.CleanupTerminalForInstance(dead.Title)
 				_ = session.DeleteNote(m.projectDir, dead.Title)
 				m.list.RemoveInstance(dead)
 			}
-			// Persist removal so no future save can re-add the killed session.
 			if err := m.saveAllInstances(); err != nil {
 				log.ErrorLog.Printf("failed to save after removing dead instances: %v", err)
 			}
 		}
 
 		shouldPlaySound := false
-		for _, instance := range m.list.GetInstances() {
-			if !instance.Started() || instance.Paused() {
+		for _, r := range msg.results {
+			inst := r.instance
+			if inst == nil || !inst.Started() || inst.Paused() {
 				continue
 			}
-			instance.CheckAndHandleTrustPrompt()
-			updated, prompt, backgroundTasks := instance.HasUpdated()
-			if updated {
-				instance.SetStatus(session.Running)
-				instance.IdleSince = nil
-			} else {
-				if prompt {
-					instance.TapEnter()
-				} else if backgroundTasks {
-					// Background agents running — don't transition to idle
-					instance.IdleSince = nil
-				} else {
-					if instance.IdleSince == nil {
-						// First idle tick — record timestamp, keep current status
-						now := time.Now()
-						instance.IdleSince = &now
-					} else if time.Since(*instance.IdleSince) >= 1*time.Second {
-						// Debounce expired — transition now
-						if instance.Status == session.Running {
-							shouldPlaySound = true
-						}
-						instance.SetStatus(session.Ready)
-						instance.IdleSince = nil
-					}
-					// else: still within debounce window, do nothing
-				}
+			if r.newStats != nil {
+				inst.ApplyDiffStats(r.newStats)
 			}
-			if err := instance.UpdateDiffStats(); err != nil {
-				log.WarningLog.Printf("could not update diff stats: %v", err)
+			switch {
+			case r.updated:
+				inst.SetStatus(session.Running)
+				inst.IdleSince = nil
+			case r.hasPrompt:
+				inst.TapEnter()
+			case r.hasBackgroundTasks:
+				inst.IdleSince = nil
+			default:
+				if inst.IdleSince == nil {
+					now := time.Now()
+					inst.IdleSince = &now
+				} else if time.Since(*inst.IdleSince) >= 1*time.Second {
+					if inst.Status == session.Running {
+						shouldPlaySound = true
+					}
+					inst.SetStatus(session.Ready)
+					inst.IdleSince = nil
+				}
 			}
 		}
 		if shouldPlaySound && m.projectConfig.GetSoundAlert() {
 			sound.Play(m.projectConfig.GetAlertSound())
 		}
-		var cmds []tea.Cmd
-		cmds = append(cmds, tickUpdateMetadataCmd)
-		if len(deadInstances) > 0 {
-			cmds = append(cmds, m.instanceChanged())
+		if len(msg.dead) > 0 {
+			return m, m.instanceChanged()
 		}
-		return m, tea.Batch(cmds...)
+		return m, nil
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			x, y := msg.X, msg.Y
@@ -1629,6 +1610,100 @@ func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
 var tickUpdateMetadataCmd = func() tea.Msg {
 	time.Sleep(500 * time.Millisecond)
 	return tickUpdateMetadataMessage{}
+}
+
+// instanceMetadata is one instance's result from the parallel metadata refresh.
+type instanceMetadata struct {
+	instance           *session.Instance
+	updated            bool
+	hasPrompt          bool
+	hasBackgroundTasks bool
+	newStats           *git.DiffStats
+}
+
+// tickMetadataMsg carries all tick-scoped metadata: externally-killed instance
+// detection and per-instance metadata refresh results. Everything the
+// 500ms tick produces is coalesced into one message so the event loop renders
+// once per tick instead of once per sub-task.
+type tickMetadataMsg struct {
+	dead    []*session.Instance
+	results []instanceMetadata
+}
+
+// tickMetadataCmd fans all tick-scoped metadata work out across goroutines
+// and waits for all of them before returning a single tickMetadataMsg.
+// Preserves the parallelism benefit (event loop never blocks on a single
+// instance's tmux/git calls) while avoiding render amplification: Update
+// runs once per tick, not once per sub-task.
+func tickMetadataCmd(instances []*session.Instance, storage *session.Storage) tea.Cmd {
+	// Snapshot eligible instances up front so the goroutines can't race with
+	// user-initiated state changes in Update.
+	snapshot := append([]*session.Instance(nil), instances...)
+	eligible := make([]*session.Instance, 0, len(snapshot))
+	for _, inst := range snapshot {
+		if !inst.Started() || inst.IsExternal() || inst.Paused() {
+			continue
+		}
+		eligible = append(eligible, inst)
+	}
+
+	return func() tea.Msg {
+		var dead []*session.Instance
+		results := make([]instanceMetadata, len(eligible))
+
+		var wg sync.WaitGroup
+
+		// Dead-instance scan (serial inside its own goroutine — GetStoredTitles
+		// is cheap and may be reused across iterations).
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var storedTitles map[string]bool
+			for _, inst := range snapshot {
+				if !inst.Started() || inst.IsExternal() {
+					continue
+				}
+				if inst.Paused() {
+					if storedTitles == nil {
+						var err error
+						storedTitles, err = storage.GetStoredTitles()
+						if err != nil {
+							log.ErrorLog.Printf("could not load stored titles: %v", err)
+							return
+						}
+					}
+					if !storedTitles[inst.Title] {
+						dead = append(dead, inst)
+					}
+				} else if !inst.TmuxAlive() && !inst.WorktreeExists() {
+					dead = append(dead, inst)
+				}
+			}
+		}()
+
+		// Per-instance metadata refresh in parallel.
+		for i, inst := range eligible {
+			wg.Add(1)
+			go func(i int, inst *session.Instance) {
+				defer wg.Done()
+				updated, prompt, bg := inst.PollStatus()
+				stats, err := inst.FetchQuickStats()
+				if err != nil {
+					log.WarningLog.Printf("could not fetch diff stats: %v", err)
+				}
+				results[i] = instanceMetadata{
+					instance:           inst,
+					updated:            updated,
+					hasPrompt:          prompt,
+					hasBackgroundTasks: bg,
+					newStats:           stats,
+				}
+			}(i, inst)
+		}
+
+		wg.Wait()
+		return tickMetadataMsg{dead: dead, results: results}
+	}
 }
 
 // handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
