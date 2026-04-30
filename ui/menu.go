@@ -73,7 +73,7 @@ type Menu struct {
 	optionPositions []optionPosition
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
+var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyProjectPicker, keys.KeyHelp, keys.KeyQuit}
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var interactiveMenuOptions = []keys.KeyName{}
@@ -191,7 +191,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group
-	systemGroup := []keys.KeyName{keys.KeyKanban, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeyKanban, keys.KeyTab, keys.KeyProjectPicker, keys.KeyHelp, keys.KeyQuit}
 
 	// Build options and compute group boundaries
 	options := make([]keys.KeyName, 0, len(instanceGroup)+len(actionGroup)+len(kanbanGroup)+len(systemGroup))
