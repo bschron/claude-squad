@@ -471,6 +471,73 @@ func (i *Instance) PollStatus() (updated bool, hasPrompt bool, hasBackgroundTask
 	return i.tmuxSession.PollStatus()
 }
 
+// descendantCPUThreshold is the minimum aggregate %CPU across all descendants
+// of the pane PID for the session to count as "actively working". Empirically
+// idle Claude with all MCP servers loaded sums to 0.0; even tiny real work
+// (npm install, grep, build) easily crosses 1%.
+const descendantCPUThreshold = 1.0
+
+// watchedFileFreshness is how recent a log/output file referenced by a
+// descendant's argv must be modified to count as activity. 30s tolerates
+// burst writes from test runners and build tools that flush in batches.
+const watchedFileFreshness = 30 * time.Second
+
+// HasActiveDescendants reports whether the process tree rooted at this
+// instance's pane has subprocesses currently doing work. Two complementary
+// signals are checked:
+//
+//  1. Aggregate %CPU across descendants ≥ descendantCPUThreshold —
+//     catches the common case (smoke tests, builds, lints).
+//  2. Any descendant's argv references an absolute log/output path that was
+//     modified within watchedFileFreshness — catches the case where Claude
+//     runs a polling shell while the workload itself is detached
+//     (e.g. `nohup npm run test:smoke ... &`, `playwright test` with PPID=1).
+//
+// snap may be nil if the process listing failed; callers treat that as
+// "no signal".
+func (i *Instance) HasActiveDescendants(snap *ProcessSnapshot) bool {
+	if snap == nil || !i.started || i.Status == Paused || i.tmuxSession == nil {
+		return false
+	}
+	pid, err := i.tmuxSession.PanePID()
+	if err != nil || pid == 0 {
+		return false
+	}
+	if snap.DescendantCPU(pid) >= descendantCPUThreshold {
+		return true
+	}
+	if snap.HasFreshWatchedFile(pid, watchedFileFreshness) {
+		return true
+	}
+	return false
+}
+
+// TranscriptActive returns true when Claude is producing output for this
+// instance's worktree. Two signals are checked, either one suffices:
+//
+//   - JSONL transcript mtime under ~/.claude/projects/<encoded>/ — fires
+//     while the model is streaming a turn or a foreground tool just returned.
+//   - Background task .output mtime under /tmp/claude-<uid>/<encoded>/.../tasks/
+//     — fires while shells launched via Claude's "run in background" feature
+//     are still appending output, even when the JSONL is silent and the pane
+//     hash is stable.
+//
+// Used as an anti-idle signal so the session doesn't get debounced into Ready
+// while there's actual work happening.
+func (i *Instance) TranscriptActive() bool {
+	if !i.started || i.Status == Paused || i.gitWorktree == nil {
+		return false
+	}
+	worktreePath := i.gitWorktree.GetWorktreePath()
+	if transcriptRecentlyModified(worktreePath, transcriptActiveThreshold) {
+		return true
+	}
+	if backgroundTaskActive(worktreePath, backgroundTaskActiveThreshold) {
+		return true
+	}
+	return false
+}
+
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {

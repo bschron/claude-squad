@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,11 @@ type TmuxSession struct {
 	ptmx *os.File
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
+
+	// panePID caches the PID of the program running inside the tmux pane
+	// (typically the claude binary). Looked up lazily on first PanePID() call;
+	// stable for the lifetime of a tmux session.
+	panePID int
 
 	// Initialized by Attach
 	// Deinitilaized by Detach
@@ -546,6 +552,25 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := exec.Command("tmux", "has-session", fmt.Sprintf("-t=%s", t.sanitizedName))
 	return t.cmdExec.Run(existsCmd) == nil
+}
+
+// PanePID returns the PID of the process running inside the tmux pane.
+// Cached after the first successful lookup since tmux doesn't reassign pane PIDs.
+func (t *TmuxSession) PanePID() (int, error) {
+	if t.panePID != 0 {
+		return t.panePID, nil
+	}
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", t.sanitizedName, "#{pane_pid}")
+	out, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, fmt.Errorf("error reading pane_pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("parse pane_pid %q: %w", out, err)
+	}
+	t.panePID = pid
+	return pid, nil
 }
 
 // CapturePaneContent captures the content of the tmux pane

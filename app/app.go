@@ -394,7 +394,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if inst.IdleSince == nil {
 					now := time.Now()
 					inst.IdleSince = &now
-				} else if time.Since(*inst.IdleSince) >= 1*time.Second {
+				} else if time.Since(*inst.IdleSince) >= 6*time.Second {
+					// 6s debounce covers Claude Code's status spinner cadence
+					// (it can re-render only every few seconds during long
+					// background commands, leaving the pane hash stable).
+					// Combined with TranscriptActive() above, this avoids
+					// false Idle while still flipping to Ready promptly when
+					// the session truly stops.
 					if inst.Status == session.Running {
 						shouldPlaySound = true
 					}
@@ -1648,6 +1654,11 @@ func tickMetadataCmd(instances []*session.Instance, storage *session.Storage) te
 		var dead []*session.Instance
 		results := make([]instanceMetadata, len(eligible))
 
+		// One process-tree snapshot per tick, shared across instance goroutines.
+		// Used to compute CPU sum of each pane's descendants — distinguishes
+		// "actually doing work" from "alive but idle daemon".
+		procSnap := session.SnapshotProcesses()
+
 		var wg sync.WaitGroup
 
 		// Dead-instance scan (serial inside its own goroutine — GetStoredTitles
@@ -1684,6 +1695,22 @@ func tickMetadataCmd(instances []*session.Instance, storage *session.Storage) te
 			go func(i int, inst *session.Instance) {
 				defer wg.Done()
 				updated, prompt, bg := inst.PollStatus()
+				// Anti-idle signals, any of which suffices:
+				//   1. CPU usage across pane descendants — catches silent
+				//      foreground tools (smoke tests, builds) where the
+				//      transcript and task .output stay quiet but actual
+				//      work is happening. Idle daemons (vite waiting for
+				//      requests) sum to ~0% and don't trigger.
+				//   2. transcript JSONL mtime — fresh while Claude is
+				//      streaming a response or a tool just returned.
+				//   3. /tmp/claude-<uid>/.../tasks/*.output mtime — fresh
+				//      while a background command is appending output.
+				if !bg && inst.HasActiveDescendants(procSnap) {
+					bg = true
+				}
+				if !bg && inst.TranscriptActive() {
+					bg = true
+				}
 				stats, err := inst.FetchQuickStats()
 				if err != nil {
 					log.WarningLog.Printf("could not fetch diff stats: %v", err)
