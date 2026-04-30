@@ -4,6 +4,7 @@ import (
 	"claude-squad/log"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 )
 
 func getWorktreeDirectory(repoPath string) string {
@@ -25,6 +26,16 @@ type GitWorktree struct {
 	// isExistingBranch is true if the branch existed before the session was created.
 	// When true, the branch will not be deleted on cleanup.
 	isExistingBranch bool
+
+	// quickStatsRunning is set while a QuickStats call is in flight for this
+	// worktree. Re-entrant callers return the lastQuickStats cache instead of
+	// spawning another git process.
+	quickStatsRunning atomic.Bool
+	// lastQuickStats holds the most recent successful QuickStats result, used
+	// when a concurrent caller hits an in-flight QuickStats.
+	lastQuickStats atomic.Pointer[DiffStats]
+	// diffRunning protects the full Diff() path the same way.
+	diffRunning atomic.Bool
 }
 
 func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, isExistingBranch bool) *GitWorktree {

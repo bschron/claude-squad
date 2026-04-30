@@ -348,7 +348,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			cmd,
 			func() tea.Msg {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(250 * time.Millisecond)
 				return previewTickMsg{}
 			},
 		)
@@ -356,13 +356,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case tickUpdateMetadataMessage:
-		// Single coalesced cmd: all tick-scoped I/O (dead-instance scan +
-		// per-instance metadata refresh) runs in parallel and returns one
-		// message, so the event loop renders once per tick.
-		return m, tea.Batch(
-			tickUpdateMetadataCmd,
-			tickMetadataCmd(m.list.GetInstances(), m.storage),
-		)
+		// Run the tick work and only re-arm the next tick after it completes
+		// (in the tickMetadataMsg handler). Re-arming here in parallel would
+		// stack git/tmux work on slow ticks.
+		return m, tickMetadataCmd(m.list.GetInstances(), m.storage)
 	case tickMetadataMsg:
 		if len(msg.dead) > 0 {
 			for _, dead := range msg.dead {
@@ -410,9 +407,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sound.Play(m.projectConfig.GetAlertSound())
 		}
 		if len(msg.dead) > 0 {
-			return m, m.instanceChanged()
+			return m, tea.Batch(m.instanceChanged(), tickUpdateMetadataCmd)
 		}
-		return m, nil
+		return m, tickUpdateMetadataCmd
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			x, y := msg.X, msg.Y
