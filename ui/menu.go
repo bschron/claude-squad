@@ -307,35 +307,58 @@ func (m *Menu) String() string {
 		}
 	}
 
-	// Single-line case: fits or only one group.
-	if totalWidth <= m.width || len(segments) <= 1 {
-		var s strings.Builder
-		cursor := 0
-		for gi, g := range effectiveGroups {
+	// recordPositions appends optionPositions for a single rendered row,
+	// given the indices of the segments on that row and the row's total width.
+	recordPositions := func(segIndices []int, rowWidth int) {
+		leftPad := (m.width - rowWidth) / 2
+		if leftPad < 0 {
+			leftPad = 0
+		}
+		cursor := leftPad
+		for si, segIdx := range segIndices {
+			g := effectiveGroups[segIdx]
 			for i := g.start; i < g.end; i++ {
 				k := m.options[i]
-				itemText, itemWidth := m.renderItem(i, k)
-
+				_, itemWidth := m.renderItem(i, k)
 				startPos := cursor
-				s.WriteString(itemText)
 				cursor += itemWidth
-
 				m.optionPositions = append(m.optionPositions, optionPosition{
 					startX: startPos,
 					endX:   cursor,
 					key:    k,
 				})
+				if i < g.end-1 {
+					cursor += len(separator)
+				}
+			}
+			if si < len(segIndices)-1 {
+				cursor += vertSepWidth
+			}
+		}
+	}
 
+	// Single-line case: fits or only one group.
+	if totalWidth <= m.width || len(segments) <= 1 {
+		var s strings.Builder
+		for gi, g := range effectiveGroups {
+			for i := g.start; i < g.end; i++ {
+				k := m.options[i]
+				itemText, _ := m.renderItem(i, k)
+				s.WriteString(itemText)
 				if i < g.end-1 {
 					s.WriteString(sepStyle.Render(separator))
-					cursor += len(separator)
 				}
 			}
 			if gi < len(segments)-1 {
 				s.WriteString(sepStyle.Render(verticalSeparator))
-				cursor += vertSepWidth
 			}
 		}
+
+		allSegs := make([]int, len(segments))
+		for i := range segments {
+			allSegs[i] = i
+		}
+		recordPositions(allSegs, totalWidth)
 
 		centeredMenuText := menuStyle.Render(s.String())
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
@@ -343,21 +366,24 @@ func (m *Menu) String() string {
 
 	// Multi-line case: greedily fill rows at group boundaries.
 	type row struct {
-		text  string
-		width int
+		text     string
+		width    int
+		segments []int
 	}
 	var rows []row
 	var currentText string
 	currentWidth := 0
+	var currentSegs []int
 	for i, seg := range segments {
 		needWidth := seg.width
 		if currentWidth > 0 {
 			needWidth += vertSepWidth
 		}
 		if currentWidth > 0 && currentWidth+needWidth > m.width {
-			rows = append(rows, row{text: currentText, width: currentWidth})
+			rows = append(rows, row{text: currentText, width: currentWidth, segments: currentSegs})
 			currentText = ""
 			currentWidth = 0
+			currentSegs = nil
 		}
 		if currentWidth > 0 {
 			currentText += sepStyle.Render(verticalSeparator)
@@ -365,13 +391,15 @@ func (m *Menu) String() string {
 		}
 		currentText += segments[i].text
 		currentWidth += seg.width
+		currentSegs = append(currentSegs, i)
 	}
 	if currentWidth > 0 {
-		rows = append(rows, row{text: currentText, width: currentWidth})
+		rows = append(rows, row{text: currentText, width: currentWidth, segments: currentSegs})
 	}
 
 	renderedRows := make([]string, len(rows))
 	for i, r := range rows {
+		recordPositions(r.segments, r.width)
 		renderedRows[i] = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, menuStyle.Render(r.text))
 	}
 
@@ -380,28 +408,27 @@ func (m *Menu) String() string {
 }
 
 // OptionAtX returns the key name for the menu option at the given X
-// coordinate (local to the menu panel). The X position accounts for the
-// centered rendering of the menu text within the menu width.
+// coordinate (local to the menu panel). Positions are stored absolutely
+// (already centered within m.width), so this is a direct lookup. When the
+// menu wraps across multiple rows, X ranges from different rows can overlap;
+// the first registered position wins.
 func (m *Menu) OptionAtX(localX int) (keys.KeyName, bool) {
-	if len(m.optionPositions) == 0 {
-		return 0, false
-	}
-
-	// The menu text is centered in m.width. Compute the left offset.
-	totalTextWidth := 0
-	if len(m.optionPositions) > 0 {
-		totalTextWidth = m.optionPositions[len(m.optionPositions)-1].endX
-	}
-	leftPad := (m.width - totalTextWidth) / 2
-	if leftPad < 0 {
-		leftPad = 0
-	}
-
-	adjustedX := localX - leftPad
 	for _, op := range m.optionPositions {
-		if adjustedX >= op.startX && adjustedX < op.endX {
+		if localX >= op.startX && localX < op.endX {
 			return op.key, true
 		}
 	}
 	return 0, false
+}
+
+// HasOption reports whether a given key was rendered in the most recent
+// String() call. Useful for tests that want to verify a key is present
+// regardless of which row it landed on.
+func (m *Menu) HasOption(k keys.KeyName) bool {
+	for _, op := range m.optionPositions {
+		if op.key == k {
+			return true
+		}
+	}
+	return false
 }
