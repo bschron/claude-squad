@@ -9,16 +9,18 @@ import (
 )
 
 // transcriptActiveThreshold is the window during which the most recent JSONL
-// transcript modification counts as "Claude is doing something". Picked to
-// cover normal streaming/tool-call cadence without flapping when the model
-// briefly pauses between turns.
-const transcriptActiveThreshold = 3 * time.Second
+// transcript modification counts as "Claude is doing something". Sized to
+// cover the gap between bursts when subagents (Stage code review,
+// security review) are in extended-thinking phases — empirically those
+// subagent transcripts can go 20–30s between writes while still actively
+// reasoning. Combined with the 6s idle debounce, true idle reaches Ready in
+// ~30s + 6s after activity stops.
+const transcriptActiveThreshold = 30 * time.Second
 
 // backgroundTaskActiveThreshold is the window for considering Claude's
 // /tmp/claude-<uid>/.../tasks/*.output files as "actively being written to".
-// Larger than the transcript window because long-running shells can buffer
-// output for several seconds between flushes.
-const backgroundTaskActiveThreshold = 8 * time.Second
+// Long-running test runners and build tools batch output every 20–30s.
+const backgroundTaskActiveThreshold = 30 * time.Second
 
 // projectPathEncodeRe matches characters Claude Code normalizes to '-' when
 // turning a working-directory path into a folder name under ~/.claude/projects.
@@ -42,10 +44,18 @@ func claudeProjectsDir() string {
 	return filepath.Join(home, ".claude", "projects")
 }
 
-// transcriptRecentlyModified reports whether the most recently modified .jsonl
-// transcript inside the project's Claude folder was touched within the
-// threshold window. Returns false if the folder is missing or unreadable —
-// callers treat that as "no signal", not "definitely idle".
+// transcriptRecentlyModified reports whether any .jsonl transcript for this
+// worktree was modified within the threshold window. Two locations are
+// checked:
+//
+//   - Top-level: ~/.claude/projects/<encoded>/*.jsonl — main session
+//     transcripts (one per `claude --continue` invocation).
+//   - Subagents: ~/.claude/projects/<encoded>/<session>/subagents/agent-*.jsonl —
+//     subagent transcripts (Stage code review, security review, etc.) which
+//     are appended in real time while the subagent is doing work, even when
+//     the main transcript and pane content stay static.
+//
+// Returns false if the folder is missing or unreadable.
 func transcriptRecentlyModified(worktreePath string, threshold time.Duration) bool {
 	if worktreePath == "" {
 		return false
@@ -61,15 +71,36 @@ func transcriptRecentlyModified(worktreePath string, threshold time.Duration) bo
 	}
 	cutoff := time.Now().Add(-threshold)
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+		if !e.IsDir() {
+			if filepath.Ext(e.Name()) != ".jsonl" {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(cutoff) {
+				return true
+			}
 			continue
 		}
-		info, err := e.Info()
+		// Per-session directory — look inside subagents/ for agent-*.jsonl.
+		subDir := filepath.Join(dir, e.Name(), "subagents")
+		subEntries, err := os.ReadDir(subDir)
 		if err != nil {
 			continue
 		}
-		if info.ModTime().After(cutoff) {
-			return true
+		for _, se := range subEntries {
+			if se.IsDir() || filepath.Ext(se.Name()) != ".jsonl" {
+				continue
+			}
+			info, err := se.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(cutoff) {
+				return true
+			}
 		}
 	}
 	return false
