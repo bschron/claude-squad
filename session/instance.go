@@ -471,27 +471,34 @@ func (i *Instance) PollStatus() (updated bool, hasPrompt bool, hasBackgroundTask
 	return i.tmuxSession.PollStatus()
 }
 
-// descendantCPUThreshold is the minimum aggregate %CPU across all descendants
-// of the pane PID for the session to count as "actively working". Empirically
-// idle Claude with all MCP servers loaded sums to 0.0; even tiny real work
-// (npm install, grep, build) easily crosses 1%.
-const descendantCPUThreshold = 1.0
+// descendantCPUThreshold is the minimum aggregate %CPU across the
+// worktree-associated process set for the session to count as "actively
+// working". Empirically idle Claude with all MCP servers loaded + idle
+// vite dev server + idle chrome subprocesses sum to 0.0; running
+// `playwright test` between page loads dips to ~0.9%, full-throttle test
+// execution crosses 5%. 0.5 separates "doing some work right now" from
+// "alive but idle" without missing the quiet-phase test runs.
+const descendantCPUThreshold = 0.5
 
 // watchedFileFreshness is how recent a log/output file referenced by a
 // descendant's argv must be modified to count as activity. 30s tolerates
 // burst writes from test runners and build tools that flush in batches.
 const watchedFileFreshness = 30 * time.Second
 
-// HasActiveDescendants reports whether the process tree rooted at this
-// instance's pane has subprocesses currently doing work. Two complementary
-// signals are checked:
+// HasActiveDescendants reports whether any process associated with this
+// instance is currently doing work. "Associated" means either a descendant
+// of the panePID OR a process whose argv references the worktree path
+// (catches detached test runners, e.g. `nohup playwright test` with PPID=1
+// running out of the worktree's node_modules whose work happens entirely
+// outside the panePID descendant tree). Two complementary signals:
 //
-//  1. Aggregate %CPU across descendants ≥ descendantCPUThreshold —
-//     catches the common case (smoke tests, builds, lints).
-//  2. Any descendant's argv references an absolute log/output path that was
-//     modified within watchedFileFreshness — catches the case where Claude
-//     runs a polling shell while the workload itself is detached
-//     (e.g. `nohup npm run test:smoke ... &`, `playwright test` with PPID=1).
+//  1. Aggregate %CPU across the associated set ≥ descendantCPUThreshold —
+//     catches smoke tests, builds, chrome-headless renderers detached from
+//     the Claude tree.
+//  2. Any process in the set has argv with a log/output path (absolute or
+//     relative to the worktree) modified within watchedFileFreshness —
+//     catches Claude's polling shells (`until grep -q ... foo.log;
+//     do sleep N; done`) where descendant CPU stays at zero.
 //
 // snap may be nil if the process listing failed; callers treat that as
 // "no signal".
@@ -503,11 +510,56 @@ func (i *Instance) HasActiveDescendants(snap *ProcessSnapshot) bool {
 	if err != nil || pid == 0 {
 		return false
 	}
-	if snap.DescendantCPU(pid) >= descendantCPUThreshold {
+	worktreePath := ""
+	if i.gitWorktree != nil {
+		worktreePath = i.gitWorktree.GetWorktreePath()
+	}
+	roots := snap.WorktreeRoots(worktreePath, pid)
+	if snap.DescendantCPU(roots) >= descendantCPUThreshold {
 		return true
 	}
-	if snap.HasFreshWatchedFile(pid, watchedFileFreshness) {
+	if snap.HasFreshWatchedFile(roots, worktreePath, watchedFileFreshness) {
 		return true
+	}
+	return false
+}
+
+// workArtifactDirs are directories under the worktree where a running test
+// runner / build tool writes artifacts. When their mtime is fresh, work is
+// happening — even if Claude is idle and no descendant CPU is detectable.
+// The list is kept narrow on purpose: dirs like dist/, build/, .next/, .vite/
+// would tick constantly during normal dev-server operation and produce false
+// positives. These specific dirs only get touched during real test/build runs.
+var workArtifactDirs = []string{
+	"test-results",
+	"playwright-report",
+	"coverage",
+	".claude/test-run-output",
+}
+
+// WorktreeArtifactActive reports whether any well-known test/build artifact
+// directory under the worktree was modified within watchedFileFreshness.
+// Catches detached test runners (e.g. `npm run test:e2e:timeline` launched
+// with PPID=1) whose output goes to fds Claude doesn't track in argv: the
+// CPU may be near zero between page transitions and there's no polling
+// shell, but the test continues writing failure artifacts to test-results/.
+func (i *Instance) WorktreeArtifactActive() bool {
+	if !i.started || i.Status == Paused || i.gitWorktree == nil {
+		return false
+	}
+	worktreePath := i.gitWorktree.GetWorktreePath()
+	if worktreePath == "" {
+		return false
+	}
+	cutoff := time.Now().Add(-watchedFileFreshness)
+	for _, sub := range workArtifactDirs {
+		info, err := os.Stat(filepath.Join(worktreePath, sub))
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			return true
+		}
 	}
 	return false
 }

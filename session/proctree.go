@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -88,45 +89,119 @@ func SnapshotProcesses() *ProcessSnapshot {
 	return snap
 }
 
-// absPathRe matches Unix-style absolute paths plausibly pointing at log /
-// output files. Anchored to start with `/`; rejects whitespace and shell
-// metacharacters. Captures things like `/tmp/smoke-timeline-8.log` and
-// `/private/tmp/foo.output` from `ps` argv dumps.
-var absPathRe = regexp.MustCompile(`/[A-Za-z0-9._/+-]+\.(log|output|out|txt|jsonl)`)
+// pathRe matches path-shaped tokens ending in a log/output extension.
+// Allows both absolute (`/tmp/foo.log`) and relative (`.claude/x/foo.log`)
+// paths — the caller resolves relative ones against a known cwd. Requires
+// at least one path separator anywhere in the match so bare `v8.log` style
+// version strings don't trigger.
+var pathRe = regexp.MustCompile(`[A-Za-z0-9._+-]*/[A-Za-z0-9._/+-]+\.(log|output|out|txt|jsonl)`)
 
-// HasFreshWatchedFile walks the descendants of root and returns true if any
-// of their argvs reference an absolute file path that was modified within
-// the threshold window. This is the escape hatch for the case where Claude
-// runs a polling shell (`until grep ... /tmp/X.log; do sleep N; done`) while
-// the actual workload (e.g. `playwright test`) is detached with PPID=1 — so
-// CPU-on-descendants alone reads zero, but the log file is still growing.
-func (s *ProcessSnapshot) HasFreshWatchedFile(root int, threshold time.Duration) bool {
-	if s == nil || root == 0 {
+// WorktreeRoots returns PIDs to count as "associated with this worktree"
+// for activity tracking. Always includes panePID. Also includes any
+// process whose argv references the worktreePath as a path component
+// (delimited by /, whitespace, or quote) — this catches detached test
+// runners launched with nohup/setsid whose PPID=1 and whose work happens
+// entirely outside the panePID descendant tree.
+//
+// Excludes processes whose argv continues into a nested worktree
+// (`<worktreePath>/.claude/worktrees/<other>/...`) so a parent worktree
+// doesn't claim a child worktree's processes. Note: this still allows
+// cross-contamination via shared node_modules paths (e.g. a child's
+// playwright child process loading playwright/lib from the parent
+// worktree's hoisted node_modules) — handled at the activity-signal
+// level, not here.
+func (s *ProcessSnapshot) WorktreeRoots(worktreePath string, panePID int) []int {
+	roots := []int{panePID}
+	if s == nil || worktreePath == "" {
+		return roots
+	}
+	seen := map[int]bool{panePID: true}
+	for pid, cmd := range s.cmdline {
+		if seen[pid] {
+			continue
+		}
+		idx := strings.Index(cmd, worktreePath)
+		if idx < 0 {
+			continue
+		}
+		end := idx + len(worktreePath)
+		if end < len(cmd) {
+			next := cmd[end]
+			if next != '/' && next != ' ' && next != '\t' && next != '"' && next != '\'' {
+				continue
+			}
+			if strings.HasPrefix(cmd[end:], "/.claude/worktrees/") {
+				continue
+			}
+		}
+		roots = append(roots, pid)
+		seen[pid] = true
+	}
+	return roots
+}
+
+// HasFreshWatchedFile walks the descendants of every root and returns true
+// if any of their argvs reference a log/output file that was modified
+// within the threshold window. cwdHint is used as the base for relative
+// paths (typically the worktree path) — pass "" to skip relative resolution.
+//
+// This is the escape hatch for the case where Claude runs a polling shell
+// (`until grep -q ... .claude/test-run-output/foo.log; do sleep N; done`)
+// while the actual workload (e.g. `playwright test`) is detached with
+// PPID=1 — so CPU-on-descendants alone reads zero, but the log file is
+// still growing. Many such shells reference the log via a relative path
+// because Claude's bash tool runs with cwd=worktree.
+func (s *ProcessSnapshot) HasFreshWatchedFile(roots []int, cwdHint string, threshold time.Duration) bool {
+	if s == nil || len(roots) == 0 {
 		return false
 	}
 	cutoff := time.Now().Add(-threshold)
-	queue := []int{root}
-	visited := map[int]bool{root: true}
+	visited := map[int]bool{}
 	checked := map[string]bool{}
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		for _, child := range s.children[pid] {
-			if visited[child] {
+	check := func(cmd string) bool {
+		for _, p := range pathRe.FindAllString(cmd, -1) {
+			resolved := p
+			if !strings.HasPrefix(p, "/") {
+				if cwdHint == "" {
+					continue
+				}
+				resolved = filepath.Join(cwdHint, p)
+			}
+			if checked[resolved] {
 				continue
 			}
-			visited[child] = true
-			queue = append(queue, child)
-			for _, p := range absPathRe.FindAllString(s.cmdline[child], -1) {
-				if checked[p] {
+			checked[resolved] = true
+			info, err := os.Stat(resolved)
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(cutoff) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, root := range roots {
+		if visited[root] {
+			continue
+		}
+		visited[root] = true
+		// The root's own argv counts (it might be the polling shell itself,
+		// matched via WorktreeRoots).
+		if check(s.cmdline[root]) {
+			return true
+		}
+		queue := []int{root}
+		for len(queue) > 0 {
+			pid := queue[0]
+			queue = queue[1:]
+			for _, child := range s.children[pid] {
+				if visited[child] {
 					continue
 				}
-				checked[p] = true
-				info, err := os.Stat(p)
-				if err != nil {
-					continue
-				}
-				if info.ModTime().After(cutoff) {
+				visited[child] = true
+				queue = append(queue, child)
+				if check(s.cmdline[child]) {
 					return true
 				}
 			}
@@ -135,31 +210,42 @@ func (s *ProcessSnapshot) HasFreshWatchedFile(root int, threshold time.Duration)
 	return false
 }
 
-// DescendantCPU returns the sum of pcpu across every descendant of root.
-// Excludes root itself — we only care about whether children are doing work.
+// DescendantCPU returns the sum of pcpu across every descendant of every
+// root, plus the non-pane roots themselves. The first root is treated as
+// panePID and excluded — Claude's binary consumes CPU during its own work
+// (covered by transcript signals); only its children matter here.
 //
-// Empirical baseline on this codebase: idle Claude (with all MCP servers
-// loaded) sums to 0.0%; vite dev server idle sums to 0.0%; running
-// `playwright test` or `npm install` or any compute-heavy descendant easily
-// crosses 1% within the first sample. Threshold of 1.0 cleanly separates
-// "doing work" from "alive but idle".
-func (s *ProcessSnapshot) DescendantCPU(root int) float64 {
-	if s == nil || root == 0 {
+// Empirical baseline: idle Claude with all MCP servers loaded sums to 0.0%;
+// idle vite dev server sums to 0.0%; running `playwright test` between
+// page loads can dip to ~0.9%; full-throttle test execution easily crosses
+// 5%. Threshold lives in the caller (descendantCPUThreshold).
+func (s *ProcessSnapshot) DescendantCPU(roots []int) float64 {
+	if s == nil || len(roots) == 0 {
 		return 0
 	}
-	queue := []int{root}
-	visited := map[int]bool{root: true}
+	visited := map[int]bool{}
 	var total float64
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		for _, child := range s.children[pid] {
-			if visited[child] {
-				continue
+	panePID := roots[0]
+	for _, root := range roots {
+		if visited[root] {
+			continue
+		}
+		visited[root] = true
+		if root != panePID {
+			total += s.pcpu[root]
+		}
+		queue := []int{root}
+		for len(queue) > 0 {
+			pid := queue[0]
+			queue = queue[1:]
+			for _, child := range s.children[pid] {
+				if visited[child] {
+					continue
+				}
+				visited[child] = true
+				total += s.pcpu[child]
+				queue = append(queue, child)
 			}
-			visited[child] = true
-			total += s.pcpu[child]
-			queue = append(queue, child)
 		}
 	}
 	return total

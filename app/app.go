@@ -1696,19 +1696,25 @@ func tickMetadataCmd(instances []*session.Instance, storage *session.Storage) te
 				defer wg.Done()
 				updated, prompt, bg := inst.PollStatus()
 				// Anti-idle signals, any of which suffices:
-				//   1. CPU usage across pane descendants — catches silent
-				//      foreground tools (smoke tests, builds) where the
-				//      transcript and task .output stay quiet but actual
-				//      work is happening. Idle daemons (vite waiting for
-				//      requests) sum to ~0% and don't trigger.
-				//   2. transcript JSONL mtime — fresh while Claude is
-				//      streaming a response or a tool just returned.
-				//   3. /tmp/claude-<uid>/.../tasks/*.output mtime — fresh
-				//      while a background command is appending output.
+				//   1. CPU usage / log-file mtime across the worktree-
+				//      associated process set (HasActiveDescendants) —
+				//      catches silent foreground tools (smoke tests,
+				//      builds) and Claude's polling shells.
+				//   2. transcript JSONL mtime + /tmp/claude-<uid>/.../tasks
+				//      .output mtime (TranscriptActive) — fresh while
+				//      Claude is streaming or a background task is
+				//      appending output.
+				//   3. mtime of well-known artifact dirs under the worktree
+				//      (test-results, playwright-report, etc.) — catches
+				//      detached test runners whose CPU dips between page
+				//      loads and whose output target isn't in any argv.
 				if !bg && inst.HasActiveDescendants(procSnap) {
 					bg = true
 				}
 				if !bg && inst.TranscriptActive() {
+					bg = true
+				}
+				if !bg && inst.WorktreeArtifactActive() {
 					bg = true
 				}
 				stats, err := inst.FetchQuickStats()
