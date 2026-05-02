@@ -15,6 +15,7 @@ import (
 // so we run `ps` exactly once instead of N times.
 type ProcessSnapshot struct {
 	children map[int][]int
+	parents  map[int]int
 	pcpu     map[int]float64
 	cmdline  map[int]string
 }
@@ -39,6 +40,7 @@ func SnapshotProcesses() *ProcessSnapshot {
 	}
 	snap := &ProcessSnapshot{
 		children: make(map[int][]int, 512),
+		parents:  make(map[int]int, 512),
 		pcpu:     make(map[int]float64, 512),
 		cmdline:  make(map[int]string, 512),
 	}
@@ -83,6 +85,7 @@ func SnapshotProcesses() *ProcessSnapshot {
 		s = strings.TrimLeft(s[idx:], " ")
 		_ = cmdStart
 		snap.children[ppid] = append(snap.children[ppid], pid)
+		snap.parents[pid] = ppid
 		snap.pcpu[pid] = pcpu
 		snap.cmdline[pid] = s
 	}
@@ -103,21 +106,35 @@ var pathRe = regexp.MustCompile(`[A-Za-z0-9._+-]*/[A-Za-z0-9._/+-]+\.(log|output
 // runners launched with nohup/setsid whose PPID=1 and whose work happens
 // entirely outside the panePID descendant tree.
 //
-// Excludes processes whose argv continues into a nested worktree
-// (`<worktreePath>/.claude/worktrees/<other>/...`) so a parent worktree
-// doesn't claim a child worktree's processes. Note: this still allows
-// cross-contamination via shared node_modules paths (e.g. a child's
+// Excludes:
+//   - Ancestors of panePID (tmux session/server invoked with `-c <worktree>`,
+//     login shells, etc.). These wrap panePID, not its work, and tmux's own
+//     pcpu drifts above the threshold during normal pane rendering — adding
+//     it as a root would falsely trip the activity signal even when the
+//     pane's contents are static.
+//   - Processes whose argv continues into a nested worktree
+//     (`<worktreePath>/.claude/worktrees/<other>/...`) so a parent worktree
+//     doesn't claim a child worktree's processes.
+//
+// Note: cross-contamination via shared node_modules paths (e.g. a child's
 // playwright child process loading playwright/lib from the parent
-// worktree's hoisted node_modules) — handled at the activity-signal
+// worktree's hoisted node_modules) is handled at the activity-signal
 // level, not here.
 func (s *ProcessSnapshot) WorktreeRoots(worktreePath string, panePID int) []int {
 	roots := []int{panePID}
 	if s == nil || worktreePath == "" {
 		return roots
 	}
+	ancestors := map[int]bool{}
+	for p := s.parents[panePID]; p > 1; p = s.parents[p] {
+		if ancestors[p] {
+			break
+		}
+		ancestors[p] = true
+	}
 	seen := map[int]bool{panePID: true}
 	for pid, cmd := range s.cmdline {
-		if seen[pid] {
+		if seen[pid] || ancestors[pid] {
 			continue
 		}
 		idx := strings.Index(cmd, worktreePath)
