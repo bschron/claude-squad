@@ -227,30 +227,31 @@ func (s *ProcessSnapshot) HasFreshWatchedFile(roots []int, cwdHint string, thres
 	return false
 }
 
-// DescendantCPU returns the sum of pcpu across every descendant of every
-// root, plus the non-pane roots themselves. The first root is treated as
-// panePID and excluded — Claude's binary consumes CPU during its own work
-// (covered by transcript signals); only its children matter here.
+// DescendantCPU returns the sum of pcpu across every root (panePID
+// included) and every descendant. Including panePID itself is load-bearing:
+// during extended thinking and subagent dispatch, Claude's binary spends
+// minutes parsing API responses and routing MCP calls while the JSONL
+// transcript stays silent and descendants (MCP servers waiting on stdin)
+// read 0%. Without panePID in the sum, those phases look idle.
 //
-// Empirical baseline: idle Claude with all MCP servers loaded sums to 0.0%;
-// idle vite dev server sums to 0.0%; running `playwright test` between
-// page loads can dip to ~0.9%; full-throttle test execution easily crosses
-// 5%. Threshold lives in the caller (descendantCPUThreshold).
+// Empirical baseline: idle Claude with all MCP servers loaded reads 0.0%
+// even after 8h+ of uptime (lifetime-averaged pcpu decays to zero when the
+// process truly idles); active Claude in extended thinking reads 2–8%;
+// running `playwright test` between page loads dips to ~0.9%; full-throttle
+// test execution crosses 5%. Threshold lives in the caller
+// (descendantCPUThreshold).
 func (s *ProcessSnapshot) DescendantCPU(roots []int) float64 {
 	if s == nil || len(roots) == 0 {
 		return 0
 	}
 	visited := map[int]bool{}
 	var total float64
-	panePID := roots[0]
 	for _, root := range roots {
 		if visited[root] {
 			continue
 		}
 		visited[root] = true
-		if root != panePID {
-			total += s.pcpu[root]
-		}
+		total += s.pcpu[root]
 		queue := []int{root}
 		for len(queue) > 0 {
 			pid := queue[0]

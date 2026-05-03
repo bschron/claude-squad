@@ -472,12 +472,14 @@ func (i *Instance) PollStatus() (updated bool, hasPrompt bool, hasBackgroundTask
 }
 
 // descendantCPUThreshold is the minimum aggregate %CPU across the
-// worktree-associated process set for the session to count as "actively
-// working". Empirically idle Claude with all MCP servers loaded + idle
-// vite dev server + idle chrome subprocesses sum to 0.0; running
-// `playwright test` between page loads dips to ~0.9%, full-throttle test
-// execution crosses 5%. 0.5 separates "doing some work right now" from
-// "alive but idle" without missing the quiet-phase test runs.
+// worktree-associated process set (panePID included) for the session to
+// count as "actively working". Empirically idle Claude with all MCP
+// servers loaded + idle vite + idle chrome subprocesses read 0.0% even
+// after hours of uptime; active Claude in extended thinking + subagent
+// dispatch reads 2–8% on the pane process alone; running `playwright test`
+// between page loads dips to ~0.9%; full-throttle test execution crosses
+// 5%. 0.5 separates "doing some work right now" from "alive but idle"
+// without missing the quiet-phase test runs or extended-thinking pauses.
 const descendantCPUThreshold = 0.5
 
 // watchedFileFreshness is how recent a log/output file referenced by a
