@@ -891,6 +891,11 @@ func (i *Instance) ApplyDiffStats(stats *git.DiffStats) {
 
 // UpdateDiffContent refreshes the full diff content (expensive) for this instance.
 // Call this on demand when the Diff tab is visible, not on the metadata tick.
+//
+// NOTE: This runs git CLI synchronously and can block for seconds on large
+// worktrees. Prefer ApplyFullDiffStats from a tea.Cmd so the Bubble Tea event
+// loop is not frozen during the call. Kept here for callers that already
+// run in the background.
 func (i *Instance) UpdateDiffContent() error {
 	if !i.started || i.Status == Paused {
 		return nil
@@ -905,6 +910,21 @@ func (i *Instance) UpdateDiffContent() error {
 	i.diffStats = stats
 	i.lastDiffContentUpdate = time.Now()
 	return nil
+}
+
+// ApplyFullDiffStats stores the result of a Diff() call performed in a
+// background goroutine and refreshes the debounce timestamp. The metadata
+// tick path uses ApplyDiffStats (which preserves prior Content); this method
+// is the parallel for full-diff fetches that produce their own Content.
+func (i *Instance) ApplyFullDiffStats(stats *git.DiffStats) {
+	if !i.started || i.Status == Paused {
+		return
+	}
+	if stats == nil {
+		return
+	}
+	i.diffStats = stats
+	i.lastDiffContentUpdate = time.Now()
 }
 
 // LastDiffContentUpdate returns when the full diff content was last refreshed.

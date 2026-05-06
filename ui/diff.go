@@ -89,7 +89,21 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		additions := AdditionStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added))
 		deletions := DeletionStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 		d.stats = lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
-		d.diff = colorizeDiff(stats.Content)
+		// When the metadata tick has populated counts but the full diff body hasn't
+		// been fetched yet (first activation of the Diff tab), show a loading hint
+		// in the body. The background fetch dispatched by app.refreshDiffContentCmd
+		// will replace this on completion.
+		if stats.Content == "" {
+			d.diff = lipgloss.Place(
+				d.width,
+				d.height-1,
+				lipgloss.Center,
+				lipgloss.Center,
+				"Loading diff…",
+			)
+		} else {
+			d.diff = colorizeDiff(stats.Content)
+		}
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
 }

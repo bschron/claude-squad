@@ -141,6 +141,12 @@ type home struct {
 	pendingNewInstancePromptMode bool
 	// autoQuitGeneration is a generation counter for auto-quit timers in interactive mode
 	autoQuitGeneration uint64
+
+	// diffContentInFlight tracks instance titles whose full-diff fetch is currently
+	// running in a background goroutine. Prevents stacking concurrent fetches —
+	// each Tab toggle into Diff or instance change would otherwise dispatch a
+	// new git process even if one is still running.
+	diffContentInFlight map[string]bool
 }
 
 func newHome(ctx context.Context, program string, autoYes bool, projectDir string) *home {
@@ -185,8 +191,9 @@ func newHome(ctx context.Context, program string, autoYes bool, projectDir strin
 		autoYes:       autoYes,
 		projectDir:    gitRepoRoot,
 		state:         stateDefault,
-		appState:      appState,
-		projectConfig: projectConfig,
+		appState:            appState,
+		projectConfig:       projectConfig,
+		diffContentInFlight: make(map[string]bool),
 	}
 	h.kanban = ui.NewKanbanBoard(&h.spinner)
 	h.list = ui.NewList(&h.spinner, autoYes)
@@ -453,6 +460,22 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case diffContentLoadedMsg:
+		delete(m.diffContentInFlight, msg.title)
+		if msg.stats != nil && msg.stats.Error != nil {
+			if !strings.Contains(msg.stats.Error.Error(), "base commit SHA not set") {
+				log.WarningLog.Printf("could not update diff content: %v", msg.stats.Error)
+			}
+		} else if msg.stats != nil {
+			if inst := m.findInstanceByTitle(msg.title); inst != nil {
+				inst.ApplyFullDiffStats(msg.stats)
+			}
+		}
+		// Re-render diff pane only if the instance is still selected and tab visible.
+		if selected := m.getActiveInstance(); selected != nil && selected.Title == msg.title {
+			m.tabbedWindow.UpdateDiff(selected)
+		}
+		return m, nil
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -1504,12 +1527,60 @@ func (m *home) instanceChanged() tea.Cmd {
 	// Update kanban board
 	m.kanban.UpdateInstances(m.list.GetInstances(), selected)
 
+	var cmds []tea.Cmd
 	// If there's no selected instance, we don't need to update the preview.
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
-		return m.handleError(err)
+		cmds = append(cmds, m.handleError(err))
 	}
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
-		return m.handleError(err)
+		cmds = append(cmds, m.handleError(err))
+	}
+	if cmd := m.refreshDiffContentCmd(selected); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+// diffContentLoadedMsg signals that a background full-diff fetch has completed
+// for the instance with the given title.
+type diffContentLoadedMsg struct {
+	title string
+	stats *git.DiffStats
+}
+
+// refreshDiffContentCmd dispatches a goroutine that runs gitWorktree.Diff()
+// off the Bubble Tea event loop. Returns nil if the Diff tab isn't visible,
+// the instance isn't ready, the debounce window hasn't elapsed, or a fetch
+// is already in flight for this instance.
+func (m *home) refreshDiffContentCmd(instance *session.Instance) tea.Cmd {
+	if !m.tabbedWindow.ShouldRefreshDiffContent(instance) {
+		return nil
+	}
+	title := instance.Title
+	if m.diffContentInFlight[title] {
+		return nil
+	}
+	worktree, err := instance.GetGitWorktree()
+	if err != nil || worktree == nil {
+		return nil
+	}
+	m.diffContentInFlight[title] = true
+	return func() tea.Msg {
+		stats := worktree.Diff()
+		return diffContentLoadedMsg{title: title, stats: stats}
+	}
+}
+
+// findInstanceByTitle returns the instance with the given title, or nil if
+// it has been removed since the lookup was scheduled.
+func (m *home) findInstanceByTitle(title string) *session.Instance {
+	for _, inst := range m.list.GetInstances() {
+		if inst.Title == title {
+			return inst
+		}
 	}
 	return nil
 }

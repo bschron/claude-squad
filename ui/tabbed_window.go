@@ -118,20 +118,28 @@ func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
 	return w.preview.UpdateContent(instance)
 }
 
+// UpdateDiff renders the Diff pane from already-cached stats on the instance.
+// It does NOT fetch new diff content — that runs in a background tea.Cmd
+// (see ShouldRefreshDiffContent / the diffContentLoadedMsg handler in app)
+// so the Bubble Tea event loop is never blocked on git.
 func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
 	if w.activeTab != DiffTab {
 		return
 	}
-	// Refresh full diff content on demand, debounced. Cheap --shortstat refreshes
-	// continue happening on the metadata tick via UpdateDiffStats.
-	if instance != nil && instance.Started() && !instance.Paused() {
-		if time.Since(instance.LastDiffContentUpdate()) > diffContentRefreshInterval {
-			if err := instance.UpdateDiffContent(); err != nil {
-				log.WarningLog.Printf("could not update diff content: %v", err)
-			}
-		}
-	}
 	w.diff.SetDiff(instance)
+}
+
+// ShouldRefreshDiffContent reports whether a background full-diff fetch should
+// be dispatched for this instance now: the Diff tab must be visible, the
+// instance must be running, and the debounce window must have elapsed.
+func (w *TabbedWindow) ShouldRefreshDiffContent(instance *session.Instance) bool {
+	if w.activeTab != DiffTab {
+		return false
+	}
+	if instance == nil || !instance.Started() || instance.Paused() {
+		return false
+	}
+	return time.Since(instance.LastDiffContentUpdate()) > diffContentRefreshInterval
 }
 
 // UpdateTerminal updates the terminal pane content. Only updates when terminal tab is active.
