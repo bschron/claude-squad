@@ -15,11 +15,12 @@ const (
 	EffortLow    EffortLevel = "low"
 	EffortMedium EffortLevel = "medium"
 	EffortHigh   EffortLevel = "high"
+	EffortXHigh  EffortLevel = "xhigh"
 	EffortMax    EffortLevel = "max"
 )
 
 // ValidEffortLevels is the ordered list of valid effort levels.
-var ValidEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortMax}
+var ValidEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 
 // DefaultEffortLevel is the default effort level when none is configured.
 var DefaultEffortLevel = EffortMedium
