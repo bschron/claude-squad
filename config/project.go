@@ -25,6 +25,25 @@ var ValidEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, Effor
 // DefaultEffortLevel is the default effort level when none is configured.
 var DefaultEffortLevel = EffortMedium
 
+// PermissionMode controls how a Claude Code session handles tool permissions.
+type PermissionMode string
+
+const (
+	// PermissionModeNormal runs claude with default permission prompts (no extra flags).
+	PermissionModeNormal PermissionMode = "normal"
+	// PermissionModeBypass runs claude with --dangerously-skip-permissions.
+	PermissionModeBypass PermissionMode = "bypass"
+	// PermissionModeAuto runs claude with --enable-auto-mode.
+	PermissionModeAuto PermissionMode = "auto"
+)
+
+// ValidPermissionModes is the ordered list of valid permission modes for the picker.
+var ValidPermissionModes = []PermissionMode{PermissionModeNormal, PermissionModeBypass, PermissionModeAuto}
+
+// DefaultPermissionMode is the default mode when none is configured.
+// Matches the legacy default of SkipPermissions=true.
+var DefaultPermissionMode = PermissionModeBypass
+
 const (
 	DefaultInstanceLimit = 10
 	MinInstanceLimit     = 1
@@ -115,8 +134,11 @@ var SoundDisplayLabels = map[SoundOption]string{
 
 // ProjectConfig represents per-project configuration stored at the git repo root.
 type ProjectConfig struct {
-	DefaultEffort    EffortLevel `json:"default_effort,omitempty"`
-	DefaultModel     ModelOption `json:"default_model,omitempty"`
+	DefaultEffort    EffortLevel    `json:"default_effort,omitempty"`
+	DefaultModel     ModelOption    `json:"default_model,omitempty"`
+	PermissionMode   PermissionMode `json:"permission_mode,omitempty"`
+	// SkipPermissions is the legacy boolean flag. Kept for backward-compatible
+	// loading; new writes use PermissionMode instead.
 	SkipPermissions  *bool       `json:"skip_permissions,omitempty"`
 	SoundAlert       *bool       `json:"sound_alert,omitempty"`
 	AlertSound       SoundOption `json:"alert_sound,omitempty"`
@@ -136,17 +158,26 @@ func (c *ProjectConfig) GetSelectedProjects() []string {
 	return valid
 }
 
-// GetSkipPermissions returns the effective skip permissions value (nil defaults to true).
-func (c *ProjectConfig) GetSkipPermissions() bool {
-	if c.SkipPermissions == nil {
-		return true
+// GetPermissionMode returns the effective permission mode, falling back to the
+// legacy SkipPermissions flag when PermissionMode is unset, and to
+// DefaultPermissionMode when neither is set.
+func (c *ProjectConfig) GetPermissionMode() PermissionMode {
+	if isValidPermissionMode(c.PermissionMode) {
+		return c.PermissionMode
 	}
-	return *c.SkipPermissions
+	if c.SkipPermissions != nil {
+		if *c.SkipPermissions {
+			return PermissionModeBypass
+		}
+		return PermissionModeNormal
+	}
+	return DefaultPermissionMode
 }
 
-// SetSkipPermissions sets the skip permissions value.
-func (c *ProjectConfig) SetSkipPermissions(v bool) {
-	c.SkipPermissions = &v
+// SetPermissionMode sets the permission mode and clears the legacy flag.
+func (c *ProjectConfig) SetPermissionMode(m PermissionMode) {
+	c.PermissionMode = m
+	c.SkipPermissions = nil
 }
 
 // GetInstanceLimit returns the effective instance limit (nil defaults to DefaultInstanceLimit).
@@ -223,6 +254,11 @@ func LoadProjectConfig(gitRoot string) *ProjectConfig {
 		cfg.DefaultEffort = DefaultEffortLevel
 	}
 
+	// Validate the loaded permission mode (empty is allowed — falls back via GetPermissionMode)
+	if cfg.PermissionMode != "" && !isValidPermissionMode(cfg.PermissionMode) {
+		cfg.PermissionMode = ""
+	}
+
 	// Validate the loaded model option
 	if !isValidModel(cfg.DefaultModel) {
 		cfg.DefaultModel = ModelDefault
@@ -256,6 +292,15 @@ func SaveProjectConfig(gitRoot string, cfg *ProjectConfig) error {
 func isValidEffort(e EffortLevel) bool {
 	for _, v := range ValidEffortLevels {
 		if v == e {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidPermissionMode(m PermissionMode) bool {
+	for _, v := range ValidPermissionModes {
+		if v == m {
 			return true
 		}
 	}

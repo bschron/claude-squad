@@ -46,14 +46,14 @@ type HelpOverlay struct {
 	helpContent        string
 	effortPicker       *EffortPicker
 	modelPicker        *ModelPicker
-	permissionToggle   *PermissionToggle
+	permissionPicker   *PermissionModePicker
 	soundToggle        *SoundToggle
 	soundPicker        *SoundPicker
 	instanceLimitPicker *InstanceLimitPicker
 	autoQuitToggle      *AutoQuitToggle
 	configMode         bool
 	configIndex        int // 0=effort, 1=model, 2=permissions, 3=sound alert, 4=alert sound, 5=instance limit, 6=auto-quit
-	onSave             func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int, bool)
+	onSave             func(config.EffortLevel, config.ModelOption, config.PermissionMode, bool, config.SoundOption, int, bool)
 	width              int
 }
 
@@ -62,18 +62,18 @@ func NewHelpOverlay(
 	helpContent string,
 	defaultEffort config.EffortLevel,
 	defaultModel config.ModelOption,
-	defaultSkipPerms bool,
+	defaultPermissionMode config.PermissionMode,
 	defaultSoundAlert bool,
 	defaultAlertSound config.SoundOption,
 	defaultInstanceLimit int,
 	defaultAutoQuit bool,
-	onSave func(config.EffortLevel, config.ModelOption, bool, bool, config.SoundOption, int, bool),
+	onSave func(config.EffortLevel, config.ModelOption, config.PermissionMode, bool, config.SoundOption, int, bool),
 ) *HelpOverlay {
 	return &HelpOverlay{
 		helpContent:         helpContent,
 		effortPicker:        NewEffortPicker(defaultEffort),
 		modelPicker:         NewModelPicker(defaultModel),
-		permissionToggle:    NewPermissionToggle(defaultSkipPerms),
+		permissionPicker:    NewPermissionModePicker(defaultPermissionMode),
 		soundToggle:         NewSoundToggle(defaultSoundAlert),
 		soundPicker:         NewSoundPicker(defaultAlertSound),
 		instanceLimitPicker: NewInstanceLimitPicker(defaultInstanceLimit),
@@ -92,8 +92,8 @@ func (h *HelpOverlay) SetWidth(width int) {
 	if h.modelPicker != nil {
 		h.modelPicker.SetWidth(innerWidth)
 	}
-	if h.permissionToggle != nil {
-		h.permissionToggle.SetWidth(innerWidth)
+	if h.permissionPicker != nil {
+		h.permissionPicker.SetWidth(innerWidth)
 	}
 	if h.soundToggle != nil {
 		h.soundToggle.SetWidth(innerWidth)
@@ -117,7 +117,7 @@ func (h *HelpOverlay) focusCurrentConfig() {
 	case configIndexModel:
 		h.modelPicker.Focus()
 	case configIndexPermissions:
-		h.permissionToggle.Focus()
+		h.permissionPicker.Focus()
 	case configIndexSoundAlert:
 		h.soundToggle.Focus()
 	case configIndexAlertSound:
@@ -137,7 +137,7 @@ func (h *HelpOverlay) blurCurrentConfig() {
 	case configIndexModel:
 		h.modelPicker.Blur()
 	case configIndexPermissions:
-		h.permissionToggle.Blur()
+		h.permissionPicker.Blur()
 	case configIndexSoundAlert:
 		h.soundToggle.Blur()
 	case configIndexAlertSound:
@@ -183,7 +183,7 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			case configIndexModel:
 				h.modelPicker.HandleKeyPress(msg)
 			case configIndexPermissions:
-				h.permissionToggle.HandleKeyPress(msg)
+				h.permissionPicker.HandleKeyPress(msg)
 			case configIndexSoundAlert:
 				h.soundToggle.HandleKeyPress(msg)
 			case configIndexAlertSound:
@@ -212,7 +212,7 @@ func (h *HelpOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 		h.onSave(
 			h.effortPicker.GetSelectedEffort(),
 			h.modelPicker.GetSelectedModel(),
-			h.permissionToggle.GetSkipPermissions(),
+			h.permissionPicker.GetSelectedMode(),
 			h.soundToggle.GetEnabled(),
 			h.soundPicker.GetSelectedSound(),
 			h.instanceLimitPicker.GetSelectedLimit(),
@@ -257,13 +257,13 @@ func (h *HelpOverlay) Render() string {
 	b.WriteString(h.modelPicker.Render())
 	b.WriteString("\n\n")
 
-	// Permission toggle
+	// Permission mode picker
 	if h.configMode && h.configIndex == configIndexPermissions {
 		b.WriteString(hoActiveIndicator.Render("> "))
 	} else if h.configMode {
 		b.WriteString("  ")
 	}
-	b.WriteString(h.permissionToggle.Render())
+	b.WriteString(h.permissionPicker.Render())
 	b.WriteString("\n\n")
 
 	// Sound alert toggle

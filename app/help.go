@@ -162,15 +162,15 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 				content,
 				m.projectConfig.DefaultEffort,
 				m.projectConfig.DefaultModel,
-				m.projectConfig.GetSkipPermissions(),
+				m.projectConfig.GetPermissionMode(),
 				m.projectConfig.GetSoundAlert(),
 				m.projectConfig.GetAlertSound(),
 				m.projectConfig.GetInstanceLimit(),
 				m.projectConfig.GetAutoQuitInteractive(),
-				func(effort config.EffortLevel, model config.ModelOption, skipPerms bool, soundAlert bool, alertSound config.SoundOption, instanceLimit int, autoQuit bool) {
+				func(effort config.EffortLevel, model config.ModelOption, permMode config.PermissionMode, soundAlert bool, alertSound config.SoundOption, instanceLimit int, autoQuit bool) {
 					m.projectConfig.DefaultEffort = effort
 					m.projectConfig.DefaultModel = model
-					m.projectConfig.SetSkipPermissions(skipPerms)
+					m.projectConfig.SetPermissionMode(permMode)
 					m.projectConfig.SetSoundAlert(soundAlert)
 					m.projectConfig.AlertSound = alertSound
 					m.projectConfig.SetInstanceLimit(instanceLimit)

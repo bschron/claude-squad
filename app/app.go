@@ -992,7 +992,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Set Loading status and finalize into the list immediately
 			instance.Effort = m.projectConfig.DefaultEffort
 			instance.Model = m.projectConfig.DefaultModel
-			instance.SkipPermissions = m.projectConfig.GetSkipPermissions()
+			instance.PermissionMode = m.projectConfig.GetPermissionMode()
 			instance.SetStatus(session.Loading)
 			m.newInstanceFinalizer()
 			m.promptAfterName = false
@@ -1075,7 +1075,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				selectedEffort := m.textInputOverlay.GetSelectedEffort()
 
 				selectedModel := m.textInputOverlay.GetSelectedModel()
-				selectedSkipPerms := m.textInputOverlay.GetSkipPermissions()
+				selectedPermMode := m.textInputOverlay.GetSelectedPermissionMode()
 
 				if !selected.Started() {
 					// Shift+N flow: instance not started yet — set branch, start, then send prompt
@@ -1089,7 +1089,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 						selected.Effort = selectedEffort
 					}
 					selected.Model = selectedModel
-					selected.SkipPermissions = selectedSkipPerms
+					selected.PermissionMode = selectedPermMode
 					selected.Prompt = prompt
 
 					// Finalize into list and start
@@ -1828,7 +1828,7 @@ func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
 		m.appConfig.GetProfiles(),
 		m.projectConfig.DefaultEffort,
 		m.projectConfig.DefaultModel,
-		m.projectConfig.GetSkipPermissions(),
+		m.projectConfig.GetPermissionMode(),
 	)
 }
 

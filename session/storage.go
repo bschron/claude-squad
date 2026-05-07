@@ -20,10 +20,13 @@ type InstanceData struct {
 	Width     int       `json:"width"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	AutoYes         bool                `json:"auto_yes"`
-	Effort          config.EffortLevel  `json:"effort,omitempty"`
-	Model           config.ModelOption  `json:"model,omitempty"`
-	SkipPermissions *bool               `json:"skip_permissions,omitempty"`
+	AutoYes         bool                  `json:"auto_yes"`
+	Effort          config.EffortLevel    `json:"effort,omitempty"`
+	Model           config.ModelOption    `json:"model,omitempty"`
+	PermissionMode  config.PermissionMode `json:"permission_mode,omitempty"`
+	// SkipPermissions is the legacy boolean flag. Read for backward compat;
+	// new sessions write PermissionMode instead.
+	SkipPermissions *bool `json:"skip_permissions,omitempty"`
 
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`

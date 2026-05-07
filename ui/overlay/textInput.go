@@ -44,7 +44,7 @@ type TextInputOverlay struct {
 	profilePicker    *ProfilePicker
 	effortPicker     *EffortPicker
 	modelPicker      *ModelPicker
-	permissionToggle *PermissionToggle
+	permissionPicker *PermissionModePicker
 	branchPicker     *BranchPicker
 	numStops         int // total number of focus stops
 }
@@ -67,32 +67,32 @@ func NewTextInputOverlayWithBranchPicker(
 	profiles []config.Profile,
 	defaultEffort config.EffortLevel,
 	defaultModel config.ModelOption,
-	defaultSkipPerms bool,
+	defaultPermissionMode config.PermissionMode,
 ) *TextInputOverlay {
 	ti := newTextarea(initialValue)
 	bp := NewBranchPicker()
 	ep := NewEffortPicker(defaultEffort)
 	mp := NewModelPicker(defaultModel)
-	pt := NewPermissionToggle(defaultSkipPerms)
+	pmp := NewPermissionModePicker(defaultPermissionMode)
 
-	var pp *ProfilePicker
+	var profPicker *ProfilePicker
 	if len(profiles) > 0 {
-		pp = NewProfilePicker(profiles)
+		profPicker = NewProfilePicker(profiles)
 	}
 
-	// Focus stops: [profilePicker] + effortPicker + modelPicker + permissionToggle + textarea + branchPicker + enterButton
+	// Focus stops: [profilePicker] + effortPicker + modelPicker + permissionPicker + textarea + branchPicker + enterButton
 	numStops := 6 // effort + model + permission + textarea + branch + enter
-	if pp != nil && pp.HasMultiple() {
+	if profPicker != nil && profPicker.HasMultiple() {
 		numStops = 7 // profile + effort + model + permission + textarea + branch + enter
 	}
 
 	overlay := &TextInputOverlay{
 		textarea:         ti,
 		Title:            title,
-		profilePicker:    pp,
+		profilePicker:    profPicker,
 		effortPicker:     ep,
 		modelPicker:      mp,
-		permissionToggle: pt,
+		permissionPicker: pmp,
 		branchPicker:     bp,
 		numStops:         numStops,
 	}
@@ -129,8 +129,8 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 	if t.modelPicker != nil {
 		t.modelPicker.SetWidth(innerWidth)
 	}
-	if t.permissionToggle != nil {
-		t.permissionToggle.SetWidth(innerWidth)
+	if t.permissionPicker != nil {
+		t.permissionPicker.SetWidth(innerWidth)
 	}
 }
 
@@ -156,7 +156,7 @@ func (t *TextInputOverlay) pickerOffset() int {
 	if t.modelPicker != nil {
 		offset++
 	}
-	if t.permissionToggle != nil {
+	if t.permissionPicker != nil {
 		offset++
 	}
 	return offset
@@ -194,9 +194,9 @@ func (t *TextInputOverlay) isModelPicker() bool {
 	return t.FocusIndex == idx
 }
 
-// isPermissionToggle returns true if the current focus is on the permission toggle.
-func (t *TextInputOverlay) isPermissionToggle() bool {
-	if t.permissionToggle == nil {
+// isPermissionPicker returns true if the current focus is on the permission mode picker.
+func (t *TextInputOverlay) isPermissionPicker() bool {
+	if t.permissionPicker == nil {
 		return false
 	}
 	idx := 0
@@ -271,11 +271,11 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.modelPicker.Blur()
 		}
 	}
-	if t.permissionToggle != nil {
-		if t.isPermissionToggle() {
-			t.permissionToggle.Focus()
+	if t.permissionPicker != nil {
+		if t.isPermissionPicker() {
+			t.permissionPicker.Focus()
 		} else {
-			t.permissionToggle.Blur()
+			t.permissionPicker.Blur()
 		}
 	}
 }
@@ -306,7 +306,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.setFocusIndex(t.numStops - 1)
 			return false, false
 		}
-		if t.isEffortPicker() || t.isModelPicker() || t.isPermissionToggle() || t.isProfilePicker() {
+		if t.isEffortPicker() || t.isModelPicker() || t.isPermissionPicker() || t.isProfilePicker() {
 			// Enter on any picker = advance to next stop
 			t.setFocusIndex(t.FocusIndex + 1)
 			return false, false
@@ -333,9 +333,9 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			}
 			return false, false
 		}
-		if t.isPermissionToggle() {
+		if t.isPermissionPicker() {
 			if msg.Type == tea.KeyLeft || msg.Type == tea.KeyRight {
-				t.permissionToggle.HandleKeyPress(msg)
+				t.permissionPicker.HandleKeyPress(msg)
 			}
 			return false, false
 		}
@@ -385,13 +385,13 @@ func (t *TextInputOverlay) GetSelectedModel() config.ModelOption {
 	return t.modelPicker.GetSelectedModel()
 }
 
-// GetSkipPermissions returns the skip permissions toggle value.
-// Returns true if no permission toggle is present (default behavior).
-func (t *TextInputOverlay) GetSkipPermissions() bool {
-	if t.permissionToggle == nil {
-		return true
+// GetSelectedPermissionMode returns the selected permission mode.
+// Returns DefaultPermissionMode if no picker is present.
+func (t *TextInputOverlay) GetSelectedPermissionMode() config.PermissionMode {
+	if t.permissionPicker == nil {
+		return config.DefaultPermissionMode
 	}
-	return t.permissionToggle.GetSkipPermissions()
+	return t.permissionPicker.GetSelectedMode()
 }
 
 // GetSelectedProgram returns the program string from the selected profile.
@@ -480,8 +480,8 @@ func (t *TextInputOverlay) Render() string {
 	}
 
 	// Render permission toggle if present
-	if t.permissionToggle != nil {
-		content += t.permissionToggle.Render() + "\n\n"
+	if t.permissionPicker != nil {
+		content += t.permissionPicker.Render() + "\n\n"
 		content += divider + "\n\n"
 	}
 

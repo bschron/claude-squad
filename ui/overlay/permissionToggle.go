@@ -1,102 +1,118 @@
 package overlay
 
 import (
+	"claude-squad/config"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// PermissionToggle is an embeddable on/off toggle for --dangerously-skip-permissions.
-type PermissionToggle struct {
-	skipPerms bool
-	focused   bool
-	width     int
+// PermissionModePicker is a 3-state picker for selecting the session's
+// permission mode (normal / bypass / auto). It mirrors the EffortPicker
+// horizontal-selector pattern.
+type PermissionModePicker struct {
+	modes   []config.PermissionMode
+	cursor  int
+	focused bool
+	width   int
 }
 
-// NewPermissionToggle creates a new permission toggle with the given default.
-func NewPermissionToggle(defaultSkipPerms bool) *PermissionToggle {
-	return &PermissionToggle{
-		skipPerms: defaultSkipPerms,
+// NewPermissionModePicker creates a new picker with the cursor set to the given default.
+func NewPermissionModePicker(defaultMode config.PermissionMode) *PermissionModePicker {
+	pp := &PermissionModePicker{
+		modes: config.ValidPermissionModes,
 	}
+	for i, m := range pp.modes {
+		if m == defaultMode {
+			pp.cursor = i
+			break
+		}
+	}
+	return pp
 }
 
-// Focus gives the toggle focus.
-func (pt *PermissionToggle) Focus() {
-	pt.focused = true
+func (pp *PermissionModePicker) Focus() {
+	pp.focused = true
 }
 
-// Blur removes focus from the toggle.
-func (pt *PermissionToggle) Blur() {
-	pt.focused = false
+func (pp *PermissionModePicker) Blur() {
+	pp.focused = false
 }
 
-// SetWidth sets the rendering width.
-func (pt *PermissionToggle) SetWidth(w int) {
-	pt.width = w
+func (pp *PermissionModePicker) SetWidth(w int) {
+	pp.width = w
 }
 
 // HandleKeyPress processes a key event. Returns true if consumed.
-func (pt *PermissionToggle) HandleKeyPress(msg tea.KeyMsg) bool {
+func (pp *PermissionModePicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	switch msg.Type {
-	case tea.KeyLeft, tea.KeyRight:
-		pt.skipPerms = !pt.skipPerms
+	case tea.KeyLeft:
+		if pp.cursor > 0 {
+			pp.cursor--
+		}
+		return true
+	case tea.KeyRight:
+		if pp.cursor < len(pp.modes)-1 {
+			pp.cursor++
+		}
 		return true
 	}
 	return false
 }
 
-// GetSkipPermissions returns the current toggle value.
-func (pt *PermissionToggle) GetSkipPermissions() bool {
-	return pt.skipPerms
+// GetSelectedMode returns the currently selected permission mode.
+func (pp *PermissionModePicker) GetSelectedMode() config.PermissionMode {
+	if pp.cursor < 0 || pp.cursor >= len(pp.modes) {
+		return config.DefaultPermissionMode
+	}
+	return pp.modes[pp.cursor]
 }
 
-// SetSkipPermissions sets the toggle value.
-func (pt *PermissionToggle) SetSkipPermissions(v bool) {
-	pt.skipPerms = v
+// SetMode positions the cursor at the given mode.
+func (pp *PermissionModePicker) SetMode(mode config.PermissionMode) {
+	for i, m := range pp.modes {
+		if m == mode {
+			pp.cursor = i
+			return
+		}
+	}
 }
 
 var (
-	ptLabelStyle = lipgloss.NewStyle().
+	pmpLabelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("62")).
 			Bold(true)
 
-	ptSelectedStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("0"))
+	pmpSelectedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("62")).
+				Foreground(lipgloss.Color("0"))
 
-	ptDimStyle = lipgloss.NewStyle().
+	pmpDimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 )
 
-// Render renders the permission toggle.
-func (pt *PermissionToggle) Render() string {
+// Render renders the permission mode picker.
+func (pp *PermissionModePicker) Render() string {
 	var s strings.Builder
-	s.WriteString(ptLabelStyle.Render("Skip Permissions"))
+	s.WriteString(pmpLabelStyle.Render("Permission Mode"))
 
-	if pt.focused {
-		s.WriteString(ptDimStyle.Render("  \u2190/\u2192 to change"))
+	if pp.focused {
+		s.WriteString(pmpDimStyle.Render("  ←/→ to change"))
 	}
 	s.WriteString("\n\n")
 
-	onLabel := " on "
-	offLabel := " off "
-
-	if pt.skipPerms {
-		if pt.focused {
-			s.WriteString(ptSelectedStyle.Render(onLabel))
+	for i, m := range pp.modes {
+		label := " " + string(m) + " "
+		if i == pp.cursor && pp.focused {
+			s.WriteString(pmpSelectedStyle.Render(label))
+		} else if i == pp.cursor {
+			s.WriteString(label)
 		} else {
-			s.WriteString(onLabel)
+			s.WriteString(pmpDimStyle.Render(label))
 		}
-		s.WriteString(ptDimStyle.Render(" | "))
-		s.WriteString(ptDimStyle.Render(offLabel))
-	} else {
-		s.WriteString(ptDimStyle.Render(onLabel))
-		s.WriteString(ptDimStyle.Render(" | "))
-		if pt.focused {
-			s.WriteString(ptSelectedStyle.Render(offLabel))
-		} else {
-			s.WriteString(offLabel)
+		if i < len(pp.modes)-1 {
+			s.WriteString(pmpDimStyle.Render(" | "))
 		}
 	}
 

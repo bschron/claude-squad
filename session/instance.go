@@ -23,8 +23,11 @@ func (i *Instance) buildStartProgram(extraFlags ...string) string {
 		for _, f := range extraFlags {
 			prog += " " + f
 		}
-		if i.SkipPermissions {
+		switch i.PermissionMode {
+		case config.PermissionModeBypass:
 			prog += " --dangerously-skip-permissions"
+		case config.PermissionModeAuto:
+			prog += " --enable-auto-mode"
 		}
 		if i.Effort != "" {
 			prog += " --effort " + string(i.Effort)
@@ -73,12 +76,13 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
-	// Effort is the effort level for Claude Code (low, medium, high, max)
+	// Effort is the effort level for Claude Code (low, medium, high, xhigh, max)
 	Effort config.EffortLevel
 	// Model is the model option for Claude Code (sonnet, opus, haiku, or empty for default)
 	Model config.ModelOption
-	// SkipPermissions controls whether --dangerously-skip-permissions is passed
-	SkipPermissions bool
+	// PermissionMode controls the permission flag passed to Claude Code:
+	//   normal → no flag, bypass → --dangerously-skip-permissions, auto → --enable-auto-mode
+	PermissionMode config.PermissionMode
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -120,21 +124,20 @@ func (i *Instance) SetManaged() {
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
-	skipPerms := i.SkipPermissions
 	data := InstanceData{
-		Title:           i.Title,
-		Path:            i.Path,
-		Branch:          i.Branch,
-		Status:          i.Status,
-		Height:          i.Height,
-		Width:           i.Width,
-		CreatedAt:       i.CreatedAt,
-		UpdatedAt:       time.Now(),
-		Program:         i.Program,
-		AutoYes:         i.AutoYes,
-		Effort:          i.Effort,
-		Model:           i.Model,
-		SkipPermissions: &skipPerms,
+		Title:          i.Title,
+		Path:           i.Path,
+		Branch:         i.Branch,
+		Status:         i.Status,
+		Height:         i.Height,
+		Width:          i.Width,
+		CreatedAt:      i.CreatedAt,
+		UpdatedAt:      time.Now(),
+		Program:        i.Program,
+		AutoYes:        i.AutoYes,
+		Effort:         i.Effort,
+		Model:          i.Model,
+		PermissionMode: i.PermissionMode,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -163,25 +166,30 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
-	// Backward compat: legacy sessions without skip_permissions default to true
-	skipPerms := true
-	if data.SkipPermissions != nil {
-		skipPerms = *data.SkipPermissions
+	// Migrate legacy SkipPermissions → PermissionMode when the new field is unset.
+	mode := data.PermissionMode
+	if mode == "" {
+		if data.SkipPermissions != nil && !*data.SkipPermissions {
+			mode = config.PermissionModeNormal
+		} else {
+			// Legacy default (skip_permissions absent or true) maps to bypass.
+			mode = config.PermissionModeBypass
+		}
 	}
 
 	instance := &Instance{
-		Title:           data.Title,
-		Path:            data.Path,
-		Branch:          data.Branch,
-		Status:          data.Status,
-		Height:          data.Height,
-		Width:           data.Width,
-		CreatedAt:       data.CreatedAt,
-		UpdatedAt:       data.UpdatedAt,
-		Program:         data.Program,
-		Effort:          data.Effort,
-		Model:           data.Model,
-		SkipPermissions: skipPerms,
+		Title:          data.Title,
+		Path:           data.Path,
+		Branch:         data.Branch,
+		Status:         data.Status,
+		Height:         data.Height,
+		Width:          data.Width,
+		CreatedAt:      data.CreatedAt,
+		UpdatedAt:      data.UpdatedAt,
+		Program:        data.Program,
+		Effort:         data.Effort,
+		Model:          data.Model,
+		PermissionMode: mode,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
