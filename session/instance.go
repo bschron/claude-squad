@@ -21,6 +21,18 @@ func (i *Instance) buildStartProgram(extraFlags ...string) string {
 	prog := i.Program
 	if isClaudeProgram(prog) {
 		for _, f := range extraFlags {
+			// Only attach --continue when Claude actually has a conversation to
+			// resume for this worktree. Otherwise `claude --continue` prints
+			// "No conversation found to continue" and exits immediately, which
+			// (with tmux remain-on-exit off) kills the pane and surfaces as
+			// "error capturing pane content". This happens whenever the
+			// worktree was recreated without local history (e.g. cross-machine
+			// session sync, or old sessions whose transcript is gone).
+			if f == "--continue" && !hasClaudeConversationHistory(i.GetWorktreePath()) {
+				log.InfoLog.Printf("skipping --continue for %q: no Claude history at %s",
+					i.Title, i.GetWorktreePath())
+				continue
+			}
 			prog += " " + f
 		}
 		switch i.PermissionMode {

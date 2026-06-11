@@ -106,6 +106,39 @@ func transcriptRecentlyModified(worktreePath string, threshold time.Duration) bo
 	return false
 }
 
+// hasClaudeConversationHistory reports whether Claude Code has at least one
+// stored top-level conversation transcript for the given worktree path — i.e.
+// whether `claude --continue` launched there would find something to continue.
+//
+// Bias is conservative: it returns false ONLY when it can positively confirm
+// the absence of history (the project folder is reachable but holds no .jsonl).
+// Any uncertainty — empty path, home-dir lookup failure, or a folder unreadable
+// for a reason other than "does not exist" — returns true, so callers keep
+// --continue and fall back to today's behavior.
+func hasClaudeConversationHistory(worktreePath string) bool {
+	if worktreePath == "" {
+		return true // can't tell → conservative
+	}
+	base := claudeProjectsDir()
+	if base == "" {
+		return true // home lookup failed → conservative
+	}
+	dir := filepath.Join(base, encodeProjectPath(worktreePath))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false // folder absent → definitively no history
+		}
+		return true // unreadable for another reason → conservative
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".jsonl" {
+			return true // a top-level transcript exists
+		}
+	}
+	return false // folder present, no transcript → no continuable history
+}
+
 // claudeTasksRoot returns /tmp/claude-<uid>, where Claude Code stores live
 // background-task output files. Each project gets a subdir named with the
 // same path encoding as ~/.claude/projects.
